@@ -79,7 +79,7 @@ jobs:
                   gh release create latest \
                     --title "Latest Build" \
                     --notes "Automatic build from \`main\` — $(date -u +'%Y-%m-%d %H:%M UTC')" \
-                    --prerelease \
+                    --latest \
                     dist/release/vibecodepc-arm64 \
                     dist/release/vibecodepc-arm \
                     dist/release/vibecodepc-amd64 \
