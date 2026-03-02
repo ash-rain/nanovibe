@@ -16,19 +16,20 @@ Read this before touching any file.
 
 ## Monorepo Structure
 
-pnpm workspace — two packages:
+Go module at the root + pnpm for the frontend only:
 
 ```
-/server    → Fastify (Node.js + TypeScript) backend
+/server    → Go backend (Chi router, SQLite, WebSockets, SSE, PTY)
 /client    → Vue 3 + Vite + Tailwind CSS frontend
 ```
 
-Root scripts:
+Root scripts via `Makefile`:
 ```bash
-pnpm dev          # Both packages in watch mode (concurrently)
-pnpm build        # Client → server/public/; then tsc for server
-pnpm typecheck    # tsc --noEmit in both packages
-pnpm lint         # ESLint across both
+make dev          # air (Go hot reload) + Vite in parallel
+make build        # vite build → server/public/; then go build -o dist/vibecodepc .
+make check        # go vet ./... + vue-tsc --noEmit
+make lint         # golangci-lint + eslint
+make cross        # GOOS=linux GOARCH=arm64 go build -o dist/vibecodepc-arm64 .
 ```
 
 ---
@@ -36,26 +37,52 @@ pnpm lint         # ESLint across both
 ## Server (`/server`)
 
 ### Stack
-- **Framework**: Fastify v5 + TypeScript
-- **Database**: `better-sqlite3` (synchronous)
-- **WebSocket**: `@fastify/websocket`
-- **Static files**: `@fastify/static` serves built client at `/`
-- **Security**: `@fastify/helmet` (CSP, HSTS, etc.)
-- **CORS**: `@fastify/cors` (dev only — Vite proxy in prod)
-- **Terminal**: `node-pty` spawns opencode, piped over WS
-- **Git**: `simple-git` for per-project git operations
-- **GitHub API**: `@octokit/rest` with stored OAuth token
-- **Metrics**: reads `/proc/stat`, `/proc/meminfo`, `/sys/class/thermal/` directly
+- **Language**: Go 1.22+
+- **Router**: `github.com/go-chi/chi/v5` — lightweight, `net/http`-compatible, composable middleware
+- **Database**: `modernc.org/sqlite` — pure Go SQLite (no CGO; cross-compiles to ARM cleanly)
+- **WebSocket**: `github.com/gorilla/websocket`
+- **Static files**: `net/http.FileServer` + `//go:embed` to bake the client build into the binary
+- **Security headers**: custom middleware (CSP, HSTS, X-Frame-Options, etc.)
+- **CORS**: `github.com/go-chi/cors` middleware (dev only)
+- **Terminal**: `github.com/creack/pty` spawns opencode, output piped over WebSocket
+- **Git**: `os/exec` shells to system `git` for reliability with auth/config
+- **GitHub API**: `github.com/google/go-github/v60` with stored OAuth token
+- **Metrics**: reads `/proc/stat`, `/proc/meminfo`, `/sys/class/thermal/` via `os` package
 
 ### Conventions
-- Routes in `server/src/routes/` — one file per domain, thin (validate → service → respond)
-- Business logic in `server/src/services/` — never in routes
-- Never `import Database from 'better-sqlite3'` outside `db/index.ts`
-- All SQLite access via the singleton from `db/index.ts`
-- Use synchronous `db.*` calls throughout (better-sqlite3 is sync by design)
-- All AI keys and GitHub token via `keystore.ts` — never read `settings` table directly in routes
-- Error responses: `reply.code(N).send({ error: 'message', detail?: 'more' })`
-- SSE streams: set `Content-Type: text/event-stream`, `Cache-Control: no-cache`, `Connection: keep-alive`; write `data: ...\n\n` frames
+- Handlers in `server/routes/` — one file per domain, thin (validate → service → respond)
+- Business logic in `server/services/` — never in handlers
+- All SQLite access via the singleton from `server/db/db.go`
+- Use the `db` package's prepared statements; never write raw SQL outside `db/`
+- All AI keys and GitHub token via `services/keystore.go` — never read `settings` table directly in routes
+- Error responses via helper: `httputil.WriteError(w, http.StatusBadRequest, "message")`
+- SSE streams: set headers then write `fmt.Fprintf(w, "data: %s\n\n", payload)` and call `flusher.Flush()`
+
+### SSE Pattern (Go)
+
+```go
+w.Header().Set("Content-Type", "text/event-stream")
+w.Header().Set("Cache-Control", "no-cache")
+w.Header().Set("Connection", "keep-alive")
+flusher, ok := w.(http.Flusher)
+if !ok {
+    http.Error(w, "streaming not supported", http.StatusInternalServerError)
+    return
+}
+for line := range logCh {
+    fmt.Fprintf(w, "data: %s\n\n", line)
+    flusher.Flush()
+}
+```
+
+### WebSocket Pattern (Go)
+
+```go
+var upgrader = websocket.Upgrader{
+    CheckOrigin: func(r *http.Request) bool { return true },
+}
+conn, err := upgrader.Upgrade(w, r, nil)
+```
 
 ### Database Schema (SQLite)
 
@@ -109,19 +136,21 @@ CREATE TABLE github_auth (
 );
 ```
 
-### Key Encryption (`db/crypto.ts`)
+### Key Encryption (`db/crypto.go`)
 
-Machine key = `SHA256(os.hostname() + ':' + primaryMacAddress())`.
-This key is derived at runtime, never stored, never logged.
+Machine key = `SHA256(hostname + ":" + primaryMACAddress())`.
+Derived at runtime via `crypto/sha256` + `net` interfaces. Never stored, never logged.
 
-```typescript
-// Usage via keystore.ts only:
-export function set(name: string, value: string): void
-export function get(name: string): string | null
-export function del(name: string): void
-export function exists(name: string): boolean
-export function mask(value: string): string  // "sk-ant-••••••••1234"
+```go
+// Usage via services/keystore.go only:
+func Set(name, value string) error
+func Get(name string) (string, bool)
+func Del(name string) error
+func Exists(name string) bool
+func Mask(value string) string  // "sk-ant-••••••••1234"
 ```
+
+AES-256-GCM via standard `crypto/aes` + `crypto/cipher`. Nonce is prepended to ciphertext, base64-encoded for storage.
 
 ---
 
@@ -347,7 +376,7 @@ POST /api/settings/providers             → { provider, key } → 204
 GET  /api/settings/tunnel                → { mode, connected, tunnelUrl, localUrl, uptimeS }
 POST /api/settings/tunnel/restart        → 204
 POST /api/settings/tunnel/upgrade        → { token } → 204
-GET  /api/settings/system                → { hostname, ip, localUrl, nodeVersion, dockerVersion, appVersion }
+GET  /api/settings/system                → { hostname, ip, localUrl, goVersion, dockerVersion, appVersion }
 POST /api/settings/system/update         → SSE stream (update.sh progress)
 ```
 
@@ -386,108 +415,149 @@ GET /auth/github/callback  → exchanges code, stores token, 302 to /app/dashboa
 
 ## Services Reference
 
-### `system-check.ts`
-```typescript
-interface SystemCheck {
-  id: 'node' | 'docker' | 'docker-daemon' | 'ram' | 'disk' | 'internet' | 'git'
-  label: string
-  critical: boolean
-  status: 'pending' | 'running' | 'pass' | 'fail' | 'warning'
-  detail?: string
-  fixable: boolean
+### `system_check.go`
+```go
+type CheckID string
+const (
+    CheckDocker       CheckID = "docker"
+    CheckDockerDaemon CheckID = "docker-daemon"
+    CheckRAM          CheckID = "ram"
+    CheckDisk         CheckID = "disk"
+    CheckInternet     CheckID = "internet"
+    CheckGit          CheckID = "git"
+)
+
+type SystemCheck struct {
+    ID       CheckID
+    Label    string
+    Critical bool
+    Status   string  // "pending" | "running" | "pass" | "fail" | "warning"
+    Detail   string
+    Fixable  bool
 }
-runAllChecks(): Promise<SystemCheck[]>
-runCheck(id: string): Promise<SystemCheck>
-// Fix actions: each streams log lines via AsyncIterable<string>
-fixNode(): AsyncIterable<string>
-fixDocker(): AsyncIterable<string>
-fixDockerDaemon(): AsyncIterable<string>
-fixGit(): AsyncIterable<string>
+
+func RunAllChecks(ctx context.Context) ([]SystemCheck, error)
+func RunCheck(ctx context.Context, id CheckID) (SystemCheck, error)
+// Fix actions return a channel of log lines:
+func FixDocker(ctx context.Context) <-chan string
+func FixDockerDaemon(ctx context.Context) <-chan string
+func FixGit(ctx context.Context) <-chan string
 ```
 
-### `opencode.ts`
-```typescript
-isInstalled(): Promise<boolean>
-install(): AsyncIterable<string>          // npm install -g opencode stdout
-getVersion(): Promise<string>
-writeConfig(providers: ProviderConfig[]): void   // writes ~/.config/opencode/config.json
-startSession(projectId: string, cwd: string): IPty
-killSession(projectId: string): void
-resizeSession(projectId: string, cols: number, rows: number): void
-getSession(projectId: string): IPty | undefined
+### `opencode.go`
+```go
+func IsInstalled() bool
+func Install(ctx context.Context) <-chan string    // streams stdout of npm install -g opencode
+func GetVersion() (string, error)
+func WriteConfig(providers []ProviderConfig) error // writes ~/.config/opencode/config.json
+func StartSession(projectID, cwd string) (*os.File, error)  // returns PTY master (creack/pty)
+func KillSession(projectID string) error
+func ResizeSession(projectID string, cols, rows uint16) error
+func GetSession(projectID string) (*os.File, bool)
 ```
 
-### `nanoclaw.ts`
-```typescript
-isCloned(): boolean
-clone(): AsyncIterable<string>
-isRunning(): Promise<boolean>
-start(): Promise<void>
-stop(): Promise<void>
-writeEnv(providers: ProviderConfig[]): void
-insertUserMessage(content: string, projectId?: string): void
-watchForResponses(since: number): AgentMessage[]
+### `nanoclaw.go`
+```go
+func IsCloned() bool
+func Clone(ctx context.Context) <-chan string
+func IsRunning(ctx context.Context) (bool, error)
+func Start(ctx context.Context) error
+func Stop(ctx context.Context) error
+func WriteEnv(providers []ProviderConfig) error
+func InsertUserMessage(content, projectID string) error
+func WatchForResponses(ctx context.Context, since int64) <-chan AgentMessage
 ```
 
-### `cloudflare.ts`
-```typescript
-download(arch: 'arm64' | 'arm' | 'amd64'): Promise<void>
-startQuickTunnel(): ChildProcess
-startNamedTunnel(token: string): ChildProcess
-stopTunnel(): void
-getStatus(): TunnelStatus
-// TunnelStatus: { mode: 'quick'|'named'|'none', connected, tunnelUrl, localUrl, uptimeS }
-validateToken(token: string): Promise<{ valid: boolean, url?: string }>
-```
+### `cloudflare.go`
+```go
+type TunnelMode string
+const (
+    ModeNone  TunnelMode = "none"
+    ModeQuick TunnelMode = "quick"
+    ModeNamed TunnelMode = "named"
+)
 
-### `github.ts`
-```typescript
-getClient(): Octokit             // throws if not authenticated
-isAuthenticated(): boolean
-getUser(): Promise<GitHubUser>
-listRepos(page: number, search?: string): Promise<Repo[]>
-listPRs(owner: string, repo: string): Promise<PR[]>
-createPR(owner: string, repo: string, params: PrCreate): Promise<PR>
-getActivity(login: string): Promise<GitHubEvent[]>
-importRepo(repoUrl: string, destPath: string): AsyncIterable<string>
-```
-
-### `git.ts`
-```typescript
-// All methods take an absolute project path
-status(path: string): Promise<GitStatus>
-diff(path: string): Promise<string>
-commit(path: string, message: string): Promise<void>
-push(path: string): Promise<void>
-pull(path: string): Promise<void>
-branches(path: string): Promise<Branch[]>
-checkout(path: string, branch: string): Promise<void>
-clone(url: string, dest: string): AsyncIterable<string>
-// Uses GIT_CONFIG=~/.vibecodepc/.gitconfig for credential injection
-```
-
-### `metrics.ts`
-```typescript
-interface SystemMetrics {
-  cpu: number        // 0–100
-  ramUsedMb: number
-  ramTotalMb: number
-  diskUsedGb: number
-  diskTotalGb: number
-  tempC: number      // from /sys/class/thermal (0 if unavailable)
-  uptimeS: number
+type TunnelStatus struct {
+    Mode      TunnelMode
+    Connected bool
+    TunnelURL string
+    LocalURL  string
+    UptimeS   int64
 }
-read(): Promise<SystemMetrics>
-// Caller streams via setInterval + SSE
+
+func Download(arch string) error  // arch: "arm64" | "arm" | "amd64"
+func StartQuickTunnel() (*exec.Cmd, error)
+func StartNamedTunnel(token string) (*exec.Cmd, error)
+func StopTunnel() error
+func GetStatus() TunnelStatus
+func ValidateToken(ctx context.Context, token string) (bool, string, error)
 ```
 
-### `keystore.ts`
-```typescript
-set(name: string, value: string): void
-get(name: string): string | null
-del(name: string): void
-exists(name: string): boolean
-mask(value: string): string
+### `github.go`
+```go
+func GetClient() (*github.Client, error)  // returns error if not authenticated
+func IsAuthenticated() bool
+func GetUser(ctx context.Context) (*GitHubUser, error)
+func ListRepos(ctx context.Context, page int, search string) ([]Repo, error)
+func ListPRs(ctx context.Context, owner, repo string) ([]PR, error)
+func CreatePR(ctx context.Context, owner, repo string, params PRCreate) (*PR, error)
+func GetActivity(ctx context.Context, login string) ([]GitHubEvent, error)
+func ImportRepo(ctx context.Context, repoURL, destPath string) <-chan string
+```
+
+### `git.go`
+```go
+// All functions shell out to system git via os/exec.
+// GIT_CONFIG is set to ~/.vibecodepc/.gitconfig for credential injection.
+
+type GitStatus struct {
+    Branch    string
+    Ahead     int
+    Behind    int
+    Staged    []string
+    Unstaged  []string
+    Untracked []string
+}
+
+type Branch struct {
+    Name    string
+    Current bool
+    Remote  bool
+}
+
+func Status(projectPath string) (GitStatus, error)
+func Diff(projectPath string) (string, error)
+func Commit(projectPath, message string) error
+func Push(projectPath string) error
+func Pull(projectPath string) error
+func Branches(projectPath string) ([]Branch, error)
+func Checkout(projectPath, branch string) error
+func Clone(ctx context.Context, url, destPath string) <-chan string
+```
+
+### `metrics.go`
+```go
+type SystemMetrics struct {
+    CPU         float64  // 0–100
+    RAMUsedMB   int64
+    RAMTotalMB  int64
+    DiskUsedGB  float64
+    DiskTotalGB float64
+    TempC       float64  // from /sys/class/thermal (0 if unavailable)
+    UptimeS     int64
+}
+
+func Read() (SystemMetrics, error)
+// Caller streams via time.Ticker + SSE
+```
+
+### `keystore.go`
+```go
+func Set(name, value string) error
+func Get(name string) (string, bool)
+func Del(name string) error
+func Exists(name string) bool
+func Mask(value string) string  // "sk-ant-••••••••1234"
 ```
 
 ---
@@ -496,27 +566,49 @@ mask(value: string): string
 
 ### Development
 ```bash
-pnpm dev
-# Server: nodemon + ts-node on :3000
-# Client: Vite on :5173 (proxies /api/*, /ws/*, /auth/* to :3000)
+make dev
+# air: Go server with hot reload on :3000
+# Vite: client dev server on :5173 (proxies /api/*, /ws/*, /auth/* to :3000)
+```
+
+`air` config (`.air.toml` at root):
+```toml
+[build]
+  cmd = "go build -o ./tmp/vibecodepc ./server/..."
+  bin = "./tmp/vibecodepc"
+  include_ext = ["go"]
+  exclude_dir = ["client", "tmp", "dist"]
 ```
 
 ### Production (Raspberry Pi)
 ```bash
-pnpm build
-node server/dist/index.js
+make build
+./dist/vibecodepc
 # Or via systemd: vibecodepc.service
 ```
+
+The binary embeds the built client assets via `//go:embed`:
+```go
+//go:embed public/*
+var staticFiles embed.FS
+```
+
+### Cross-Compilation for ARM64
+```bash
+GOOS=linux GOARCH=arm64 go build -o dist/vibecodepc-arm64 ./server/...
+```
+
+No CGO — `modernc.org/sqlite` is pure Go so this works without a cross-toolchain.
 
 ### Environment Variables
 
 ```env
 PORT=3000
 HOST=0.0.0.0
-NODE_ENV=production
+APP_ENV=production
 DATA_DIR=/home/pi/.vibecodepc/data
 
-# GitHub OAuth (register at github.com/settings/developers)
+# GitHub OAuth App (register at github.com/settings/developers)
 GITHUB_CLIENT_ID=your_client_id
 GITHUB_CLIENT_SECRET=your_client_secret
 GITHUB_REDIRECT_URI=http://localhost:3000/auth/github/callback
@@ -530,32 +622,33 @@ GITHUB_REDIRECT_URI=http://localhost:3000/auth/github/callback
 
 - Cloned into `~/.vibecodepc/nanoclaw/` during setup wizard Step 7
 - SQLite at `~/.vibecodepc/nanoclaw/data/nanoclaw.db` (volume-mounted into Docker)
-- `scripts/nanoclaw-web-bridge.ts` applied post-clone: registers `web` as a virtual platform
+- `scripts/nanoclaw-web-bridge.patch` applied post-clone: registers `web` as a virtual platform
 - Never modify nanoclaw's source in-repo — apply as a patch after cloning
 
 ---
 
 ## Common Pitfalls
 
-1. **node-pty on ARM**: Native module — run `npm rebuild node-pty` after `pnpm install` on Pi.
-2. **better-sqlite3 on ARM**: Same native compile requirement.
-3. **opencode PATH**: Use `which opencode` at runtime; don't assume `/usr/local/bin`.
-4. **cloudflared arch**: `process.arch` → `arm64` / `arm` / `x64`; map to cloudflare release names (`linux-arm64`, `linux-arm`, `linux-amd64`).
+1. **creack/pty on ARM**: Pure Go — no native compile needed. Works out of the box.
+2. **modernc.org/sqlite on ARM**: Pure Go — cross-compiles cleanly with `GOARCH=arm64`. No CGO.
+3. **opencode PATH**: opencode is a Node.js app; use `exec.LookPath("opencode")` at runtime.
+4. **cloudflared arch**: `runtime.GOARCH` → `arm64` / `arm` / `amd64`; map to cloudflare release names (`linux-arm64`, `linux-arm`, `linux-amd64`).
 5. **SSE and quick tunnel URL**: Parse stdout of `cloudflared` for lines matching `trycloudflare.com` to extract the assigned URL.
 6. **GitHub OAuth redirect URI**: Must exactly match what's registered in the GitHub OAuth App. In dev this is `http://localhost:3000/auth/github/callback`; in production it must be the Cloudflare tunnel URL. Surfaced clearly in Settings.
-7. **simple-git credentials**: Inject via `GIT_CONFIG` env pointing to `~/.vibecodepc/.gitconfig` which uses `url.<base>.insteadOf` + credential helper storing the GitHub token.
-8. **Metrics on non-Pi Linux**: `/sys/class/thermal/` may not exist — `tempC` returns 0 gracefully.
-9. **SPA catch-all**: Use `@fastify/static` + a `GET *` route that sends `index.html` for all non-API, non-WS, non-auth paths.
+7. **git credentials**: Inject via `GIT_CONFIG` env pointing to `~/.vibecodepc/.gitconfig` which uses `url.<base>.insteadOf` + credential helper storing the GitHub token.
+8. **Metrics on non-Pi Linux**: `/sys/class/thermal/` may not exist — `TempC` returns 0 gracefully.
+9. **SPA catch-all**: Register a catch-all route after all API routes that serves `index.html` from the embedded FS for all non-API, non-WS, non-auth paths.
+10. **Context cancellation**: All long-running goroutines (SSE, PTY piping, metrics tickers) must respect `r.Context().Done()` to clean up on client disconnect.
 
 ---
 
 ## Testing
 
-- Unit: Vitest in both packages; colocated `*.test.ts`
-- Server integration: `fastify.inject()` (no real HTTP)
+- Unit: `go test ./...` with table-driven tests, colocated `*_test.go`
+- Handler tests: `net/http/httptest` with the Chi router (no real HTTP listener)
 - Client: `@vue/test-utils` + Vitest + happy-dom
 - E2E: Playwright (Phase 8+)
-- CI: GitHub Actions on `main` — lint + typecheck + unit tests
+- CI: GitHub Actions on `main` — `go vet`, `golangci-lint`, `go test`, vue-tsc, ESLint
 
 ---
 

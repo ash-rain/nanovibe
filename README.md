@@ -9,6 +9,8 @@ One command installs everything. The app does the rest.
 
 VibeCodePC is a self-hosted web application that transforms a Raspberry Pi (or any Linux machine) into a complete AI-assisted coding station. It installs itself, configures itself, and hands you a live URL — then guides you through the rest with an automated setup wizard.
 
+The backend is a single Go binary. No runtime to install, no node_modules — just copy the binary, run it, and get to work.
+
 ---
 
 ## Install
@@ -44,7 +46,7 @@ Open the Remote URL from **any device, anywhere** — your phone, laptop, a frie
 | OS | Raspberry Pi OS 64-bit, Ubuntu 22.04+, Debian 12+ |
 | Network | Internet connection for install |
 
-Everything else (Node.js, Docker, git, cloudflared) is installed automatically.
+Everything else (Docker, git, cloudflared) is installed automatically. The VibeCodePC server itself is a prebuilt Go binary — no Go compiler or runtime needed.
 
 ---
 
@@ -55,7 +57,7 @@ Eight steps, almost entirely automated. Watch the progress bars — you're only 
 | Step | What the app does automatically | What you do |
 |---|---|---|
 | Welcome | Detects hostname, personalizes the greeting | Click "Start" |
-| System Check | Runs checks; offers one-click "Fix" for any failures (installs Docker, Node, git) | Watch / approve fixes |
+| System Check | Runs checks; offers one-click "Fix" for any failures (installs Docker, git) | Watch / approve fixes |
 | Cloudflare Tunnel | Already running — shows live URL and QR code | Optionally upgrade to a stable named tunnel |
 | GitHub | OAuth connect flow | Click "Connect GitHub", approve in popup |
 | AI Providers | Scans env vars for existing keys, auto-tests each one | Paste any missing keys |
@@ -117,7 +119,7 @@ A web chat interface backed by [nanoclaw](https://github.com/qwibitai/nanoclaw) 
 
 - Support for Anthropic, OpenAI, Google Gemini, and Ollama
 - Keys auto-detected from environment variables and tested immediately
-- AES-256-GCM encrypted at rest with a machine-derived key
+- AES-256-GCM encrypted at rest with a machine-derived key (standard Go `crypto` package)
 - Rotate or remove any key from Settings anytime
 
 ---
@@ -130,15 +132,16 @@ https://<tunnel>.trycloudflare.com   (internet, via cloudflared — set up by in
               │
               │  HTTP / WebSocket / SSE
               ▼
-        Fastify Server :3000
+        Go Server (Chi) :3000
               │
-              ├── opencode (node-pty)  ─► per-project terminal sessions
-              ├── NanoClaw (Docker)    ─► Claude agent, SQLite bridge
-              ├── GitHub Service       ─► Octokit OAuth + repo/PR API
-              ├── Git Service          ─► simple-git per-project operations
-              ├── Metrics Service      ─► CPU/RAM/disk/temp SSE stream
-              ├── cloudflared          ─► quick or named tunnel → :3000
-              └── SQLite              ─► projects, settings, messages, auth
+              ├── opencode (creack/pty) ─► per-project terminal sessions
+              ├── NanoClaw (Docker)     ─► Claude agent, SQLite bridge
+              ├── GitHub Service        ─► go-github OAuth + repo/PR API
+              ├── Git Service           ─► os/exec → system git, per-project
+              ├── Metrics Service       ─► /proc + /sys SSE stream
+              ├── cloudflared           ─► quick or named tunnel → :3000
+              └── SQLite               ─► projects, settings, messages, auth
+                    (modernc.org/sqlite — pure Go, no CGO)
 ```
 
 ---
@@ -148,15 +151,19 @@ https://<tunnel>.trycloudflare.com   (internet, via cloudflared — set up by in
 | Layer | Technology |
 |---|---|
 | Frontend | Vue 3, Vite, Tailwind CSS v4, Pinia |
-| Backend | Node.js 20, Fastify v5, TypeScript |
-| Terminal | xterm.js + node-pty |
-| Git | simple-git |
-| GitHub API | Octokit (`@octokit/rest`) |
-| Database | SQLite (better-sqlite3) |
+| Backend | Go 1.22+, Chi router |
+| Terminal | xterm.js + creack/pty |
+| WebSockets | gorilla/websocket |
+| SSE | Standard `net/http` with `http.Flusher` |
+| Git | os/exec → system git |
+| GitHub API | google/go-github |
+| Database | SQLite (modernc.org/sqlite — pure Go) |
+| Key encryption | AES-256-GCM (standard Go `crypto` package) |
 | AI Coding | opencode (anomalyco/opencode) |
 | AI Agent | nanoclaw (qwibitai/nanoclaw) |
 | Tunneling | cloudflared (Cloudflare free tier) |
 | Containers | Docker |
+| Binary | Single statically-linked binary with embedded frontend |
 
 ---
 
@@ -207,9 +214,16 @@ Removes the app and systemd services. Does **not** delete your project directori
 ## Contributing
 
 ```bash
+# Prerequisites: Go 1.22+, pnpm, air (go install github.com/cosmtrek/air@latest)
+
 # Development (no sudo needed — uses port 3000)
-pnpm install
-pnpm dev        # Server :3000, Vite client :5173
+make dev        # Go server :3000 (air hot reload) + Vite client :5173
+
+# Build production binary (embeds client assets)
+make build      # outputs dist/vibecodepc
+
+# Cross-compile for Raspberry Pi
+make cross      # outputs dist/vibecodepc-arm64
 ```
 
 See [PLAN.md](./PLAN.md) for the full development roadmap and [CLAUDE.md](./CLAUDE.md) for coding conventions.

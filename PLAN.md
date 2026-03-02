@@ -16,7 +16,7 @@ VibeCodePC.com transforms a Raspberry Pi (or any Linux machine) into a fully sel
 Every interaction follows one rule: **the app should do the work, not the user.**
 
 - **Auto-detect**: system capabilities, installed tools, existing API keys in env vars, GitHub identity
-- **Auto-install**: missing dependencies (Docker, Node) with live terminal progress
+- **Auto-install**: missing dependencies (Docker, git) with live terminal progress
 - **Auto-configure**: opencode and nanoclaw from stored provider keys — no manual config files
 - **Auto-advance**: wizard steps complete themselves when all checks pass; user just watches
 - **Auto-fix**: every failing check has a one-click "Fix it" action that runs and re-checks
@@ -30,19 +30,19 @@ Every interaction follows one rule: **the app should do the work, not the user.*
 |---|---|
 | Frontend | Vue 3, Vite, Tailwind CSS v4, Pinia, Vue Router |
 | Terminal embed | `@xterm/xterm` + `@xterm/addon-fit` + `@xterm/addon-web-links` |
-| Backend | Node.js 20+, Fastify v5, TypeScript |
-| WebSockets | `@fastify/websocket` (terminal I/O, live metrics) |
-| SSE | Native Fastify streams (agent chat, log tailing, install progress) |
-| Database | SQLite via `better-sqlite3` |
-| Process mgmt | `node-pty` (opencode terminal sessions) |
-| Docker mgmt | Dockerode |
-| Git operations | `simple-git` (status, diff, commit, push, pull, branches) |
-| GitHub API | Octokit REST (`@octokit/rest`) + OAuth flow |
-| Key storage | AES-256-GCM encrypted fields in SQLite |
+| Backend | Go 1.22+, Chi router |
+| WebSockets | `gorilla/websocket` (terminal I/O) |
+| SSE | Standard `net/http` with `http.Flusher` (agent chat, log tailing, metrics) |
+| Database | SQLite via `modernc.org/sqlite` (pure Go, no CGO) |
+| Process mgmt | `creack/pty` (opencode terminal sessions) |
+| Git operations | `os/exec` → system `git` (status, diff, commit, push, pull, branches) |
+| GitHub API | `google/go-github` + OAuth flow |
+| Key storage | AES-256-GCM encrypted fields in SQLite (standard `crypto` package) |
 | Tunneling | cloudflared (Cloudflare Tunnel binary, quick + named modes) |
 | AI Coding | opencode (anomalyco/opencode) |
 | AI Agent | nanoclaw (qwibitai/nanoclaw) |
 | Installer | Bash script + systemd unit files |
+| Binary | Single statically-linked Go binary with embedded frontend assets |
 
 ---
 
@@ -53,22 +53,22 @@ Browser (Vue 3)
      │
      │  HTTP / WebSocket / SSE
      ▼
-Fastify Server :3000
+Go Server (Chi) :3000
      ├── /api/setup          ← Wizard state machine + auto-run actions
      ├── /api/projects       ← Project CRUD + git status
      ├── /api/github         ← OAuth flow, repo browser, PR creation
      ├── /api/settings       ← AI keys, tunnel config, system info
      ├── /api/agent          ← NanoClaw bridge (SSE + POST)
      ├── /api/metrics/stream ← SSE: CPU/RAM/disk/temp every 2 s
-     ├── /ws/terminal/:id    ← xterm.js ↔ node-pty ↔ opencode
+     ├── /ws/terminal/:id    ← xterm.js ↔ creack/pty ↔ opencode
      ├── /auth/github        ← GitHub OAuth callback
-     └── /* (SPA)            ← Serves Vue build
+     └── /* (SPA)            ← Serves embedded Vue build (//go:embed)
      │
-     ├── OpenCode Service     — node-pty sessions per project
-     ├── NanoClaw Service     — Dockerode + SQLite bridge
-     ├── GitHub Service       — Octokit, OAuth token, repo/PR API
-     ├── Git Service          — simple-git per-project operations
-     ├── Metrics Service      — /proc + os module poller
+     ├── OpenCode Service     — creack/pty sessions per project
+     ├── NanoClaw Service     — Docker exec + SQLite bridge
+     ├── GitHub Service       — go-github, OAuth token, repo/PR API
+     ├── Git Service          — os/exec → system git, per-project
+     ├── Metrics Service      — /proc + os package poller
      ├── Cloudflare Service   — quick tunnel / named tunnel process
      └── SQLite DB
            ├── setup_state
@@ -87,39 +87,39 @@ vibecodepc/
 ├── PLAN.md
 ├── CLAUDE.md
 ├── README.md
-├── package.json              # Workspace root (pnpm workspaces)
-├── pnpm-workspace.yaml
+├── go.mod                    # Go module root (module: vibecodepc)
+├── go.sum
+├── .air.toml                 # air hot-reload config (dev only)
+├── Makefile                  # dev, build, check, lint, cross targets
 │
-├── server/
-│   ├── package.json
-│   ├── tsconfig.json
-│   └── src/
-│       ├── index.ts
-│       ├── config.ts
-│       ├── db/
-│       │   ├── index.ts
-│       │   ├── schema.ts
-│       │   └── crypto.ts
-│       ├── routes/
-│       │   ├── setup.ts      # Wizard state + auto-action SSE streams
-│       │   ├── projects.ts   # CRUD + git status per project
-│       │   ├── github.ts     # OAuth, repo list, PR create, webhooks
-│       │   ├── settings.ts   # AI keys, tunnel, system info
-│       │   ├── agent.ts      # NanoClaw SSE stream + POST
-│       │   ├── metrics.ts    # SSE: real-time system vitals
-│       │   └── terminal.ts   # WS terminal sessions
-│       └── services/
-│           ├── setup.ts        # Step state machine + auto-run logic
-│           ├── system-check.ts # Checks + auto-installers (Docker, Node)
-│           ├── opencode.ts     # Install, launch, kill sessions
-│           ├── nanoclaw.ts     # Clone, configure, Docker lifecycle
-│           ├── cloudflare.ts   # Quick/named tunnel process manager
-│           ├── github.ts       # Octokit client, OAuth, repo/PR API
-│           ├── git.ts          # simple-git per-project operations
-│           ├── metrics.ts      # CPU/RAM/disk/temp reader
-│           └── keystore.ts     # AES-256-GCM key store
+├── server/                   # Go source packages
+│   ├── main.go               # Entry point: wire up Chi, DB, services, start
+│   ├── config/
+│   │   └── config.go         # Env var parsing, defaults
+│   ├── db/
+│   │   ├── db.go             # SQLite singleton, migrations on boot
+│   │   ├── schema.go         # CREATE TABLE statements
+│   │   └── crypto.go         # AES-256-GCM + machine key derivation
+│   ├── routes/
+│   │   ├── setup.go          # Wizard state + auto-action SSE streams
+│   │   ├── projects.go       # CRUD + git status per project
+│   │   ├── github.go         # OAuth, repo list, PR create
+│   │   ├── settings.go       # AI keys, tunnel, system info
+│   │   ├── agent.go          # NanoClaw SSE stream + POST
+│   │   ├── metrics.go        # SSE: real-time system vitals
+│   │   └── terminal.go       # WS terminal sessions (gorilla/websocket)
+│   └── services/
+│       ├── setup.go          # Step state machine + auto-run logic
+│       ├── system_check.go   # Checks + auto-installers (Docker, git)
+│       ├── opencode.go       # Install, launch, kill sessions (creack/pty)
+│       ├── nanoclaw.go       # Clone, configure, Docker lifecycle
+│       ├── cloudflare.go     # Quick/named tunnel process manager
+│       ├── github.go         # go-github client, OAuth, repo/PR API
+│       ├── git.go            # os/exec git per-project operations
+│       ├── metrics.go        # CPU/RAM/disk/temp reader
+│       └── keystore.go       # AES-256-GCM key store
 │
-├── client/
+├── client/                   # Vue 3 frontend (standalone pnpm package)
 │   ├── package.json
 │   ├── vite.config.ts
 │   ├── tailwind.config.ts
@@ -201,22 +201,23 @@ vibecodepc/
 
 ### Phase 1 — Foundation (Week 1)
 
-**Goal**: Server + Vue shell with auth skeleton running.
+**Goal**: Go server + Vue shell with auth skeleton running.
 
-- [ ] pnpm workspace: `server/` + `client/` packages, shared tsconfig
-- [ ] Fastify server: static file serving, CORS for dev, `@fastify/helmet`
-- [ ] SQLite schema: all 5 tables (see CLAUDE.md), migrations on boot
+- [ ] Go module init: `go mod init vibecodepc`, add Chi, gorilla/websocket, modernc.org/sqlite, go-github, creack/pty
+- [ ] `Makefile` with `dev`, `build`, `check`, `lint`, `cross` targets
+- [ ] `.air.toml` for Go hot reload; `vite.config.ts` proxy `/api/*`, `/ws/*`, `/auth/*` to `:3000`
+- [ ] Go server: Chi router, static file serving from `//go:embed public/*`, security headers middleware
+- [ ] SQLite schema: all 5 tables (see CLAUDE.md), `db.go` runs migrations on startup
 - [ ] Vue 3 + Vite + Tailwind CSS v4 scaffold with design tokens
 - [ ] Vue Router: `/setup/*` and `/app/*` root guards; setup-completion check on boot
 - [ ] Wizard shell: `WizardLayout` with animated step rail
 - [ ] Pinia stores: skeleton for all 6 domains
 - [ ] GitHub OAuth App registration in config: `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`
-- [ ] `/auth/github` callback route + token storage in keystore
+- [ ] `/auth/github` routes in Go + token storage in keystore
 - [ ] `useFetch` composable (base URL from env, auto JSON, error normalisation)
-- [ ] ESLint + Prettier shared config
-- [ ] Dev proxy: Vite → Fastify for `/api/*`, `/ws/*`, `/auth/*`
+- [ ] golangci-lint + ESLint + Prettier shared config
 
-**Deliverable**: `pnpm dev` shows the wizard welcome screen; GitHub OAuth round-trip works.
+**Deliverable**: `make dev` shows the wizard welcome screen; GitHub OAuth round-trip works.
 
 ---
 
@@ -224,7 +225,7 @@ vibecodepc/
 
 **Goal**: Fully automated wizard that configures the device with minimal user input.
 
-The wizard tracks state server-side. On load it restores the user to their last step. Each step fires its checks/installs automatically on mount — the user watches progress, not drives it.
+The wizard tracks state server-side in SQLite. On load it restores the user to their last step. Each step fires its checks/installs automatically on mount — the user watches progress, not drives it.
 
 ---
 
@@ -239,17 +240,18 @@ The wizard tracks state server-side. On load it restores the user to their last 
 
 #### Step 2 — System Check (fully automated)
 
-`system-check.ts` runs all checks in parallel on mount. Each check row animates through pending → running → pass/fail.
+`system_check.go` runs all checks in parallel on mount. Each check row animates through pending → running → pass/fail.
 
 | Check | Auto-fix available? |
 |---|---|
-| Node.js ≥ 20 | Yes — install via nvm (SSE log stream) |
 | Docker installed | Yes — install Docker Engine (SSE log stream) |
 | Docker daemon running | Yes — `sudo systemctl start docker` |
 | RAM ≥ 1 GB | No — display warning only |
 | Disk ≥ 5 GB free | No — show usage, proceed with warning |
 | Internet (fetch `1.1.1.1`) | No — must fix externally |
 | `git` installed | Yes — `apt-get install -y git` |
+
+Note: Go itself is not a system check — the app runs as a prebuilt binary. The installer handles Go if building from source.
 
 **Auto-fix flow**:
 - User clicks "Fix" on a failing row
@@ -315,7 +317,7 @@ On mount:
 4. Show: `opencode --version` output in a styled terminal block
 5. Provider selector (pre-filled from Step 5)
 
-User sees install happen in real time. No input needed unless choosing non-default provider.
+Note: opencode is a Node.js application. Node.js is only required for opencode, not for the VibeCodePC server itself.
 
 ---
 
@@ -352,15 +354,15 @@ User sees install happen in real time. No input needed unless choosing non-defau
 
 **Goal**: In-browser terminal running opencode per project.
 
-- `opencode.ts` service:
-  - `start(projectId, cwd)` → spawn `opencode` via `node-pty` in project CWD
-  - `kill(projectId)` → SIGTERM + cleanup
-  - `resize(projectId, cols, rows)` → pty.resize()
-  - Session registry: `Map<projectId, { pty, clients: Set<WebSocket> }>`
-- WebSocket route `/ws/terminal/:projectId`:
+- `opencode.go` service:
+  - `StartSession(projectID, cwd)` → spawn `opencode` via `creack/pty` in project CWD
+  - `KillSession(projectID)` → SIGTERM + cleanup
+  - `ResizeSession(projectID, cols, rows)` → `pty.Setsize()`
+  - Session registry: `sync.Map` keyed by projectID → `{ ptmx *os.File, clients sync.Map }`
+- WebSocket route `/ws/terminal/:projectId` (gorilla/websocket):
   - On connect: attach to or create session
-  - `{ type: 'input', data }` → pty stdin
-  - `{ type: 'resize', cols, rows }` → pty resize
+  - `{ type: 'input', data }` → write to PTY master
+  - `{ type: 'resize', cols, rows }` → PTY resize
   - PTY stdout → broadcast to all WebSocket clients for that session
   - `{ type: 'exit', code }` on process exit
 - `TerminalPane.vue`:
@@ -379,12 +381,12 @@ User sees install happen in real time. No input needed unless choosing non-defau
 
 **Goal**: Polished web chat UI bridged to the nanoclaw agent.
 
-- `nanoclaw.ts` service:
+- `nanoclaw.go` service:
   - Inserts user messages into nanoclaw's SQLite `messages` table as `source: 'web'`
-  - Polls `SELECT` with timestamp cursor (100 ms interval) for outbound responses
-  - Emits `agent_message` via Node EventEmitter → consumed by SSE route
-- `GET /api/agent/stream` — SSE, heartbeat ping every 15 s
-- `POST /api/agent/message` — { content, projectId? }
+  - Polls `SELECT` with timestamp cursor (100 ms interval) for outbound responses via `time.Ticker`
+  - Emits agent messages via Go channel → consumed by SSE handler
+- `GET /api/agent/stream` — SSE, heartbeat ping every 15 s (uses `http.Flusher`)
+- `POST /api/agent/message` — `{ content, projectId? }`
 - `AgentView.vue`:
   - Chat bubbles: user right, agent left with avatar
   - Animated typing indicator (three dots) while agent is processing
@@ -399,26 +401,26 @@ User sees install happen in real time. No input needed unless choosing non-defau
 
 **Goal**: GitHub as a first-class citizen — repos, projects, git ops, PRs.
 
-#### GitHub Service (`github.ts`)
+#### GitHub Service (`github.go`)
 
 - OAuth: server-side flow (`/auth/github/start` → GitHub → `/auth/github/callback`)
 - Token stored encrypted in keystore
-- Octokit client initialized on demand with stored token
-- `listRepos(page, search)` → paginated repo list with language, stars, last push
-- `listPRs(owner, repo)` → open PRs with title, branch, status checks
-- `createPR(owner, repo, params)` → create PR from current branch
-- `getActivity(username)` → recent events (pushes, PR opens, issues)
+- `go-github` client initialized on demand with stored token
+- `ListRepos(page, search)` → paginated repo list with language, stars, last push
+- `ListPRs(owner, repo)` → open PRs with title, branch, status checks
+- `CreatePR(owner, repo, params)` → create PR from current branch
+- `GetActivity(username)` → recent events (pushes, PR opens, issues)
 
-#### Git Service (`git.ts`)
+#### Git Service (`git.go`)
 
-- `status(projectPath)` → `{ branch, ahead, behind, staged, unstaged, untracked }`
-- `diff(projectPath)` → unified diff string
-- `commit(projectPath, message)` → stage all + commit
-- `push(projectPath)` → push current branch (uses stored GitHub token via git credential helper)
-- `pull(projectPath)` → pull with rebase
-- `branches(projectPath)` → list local + remote branches
-- `checkout(projectPath, branch)` → switch branch (stash if dirty)
-- `clone(url, destPath)` → git clone with progress events via `simple-git` tasks
+- `Status(projectPath)` → `{ Branch, Ahead, Behind, Staged, Unstaged, Untracked }`
+- `Diff(projectPath)` → unified diff string
+- `Commit(projectPath, message)` → stage all + commit
+- `Push(projectPath)` → push current branch (uses stored GitHub token via git credential helper)
+- `Pull(projectPath)` → pull with rebase
+- `Branches(projectPath)` → list local + remote branches
+- `Checkout(projectPath, branch)` → switch branch (stash if dirty)
+- `Clone(ctx, url, destPath)` → git clone, progress lines emitted on returned channel
 
 #### GitHub Routes (`/api/github`)
 
@@ -550,7 +552,7 @@ Tabs: AI Providers | GitHub | Cloudflare | OpenCode | NanoClaw | System
 - **Cloudflare**: Current mode (quick/named), tunnel URL, switch to named, custom domain
 - **OpenCode**: Binary path, default provider, version, reinstall button
 - **NanoClaw**: Container state, messaging platforms, agent persona name, restart
-- **System**: Hostname, IP, versions table, `update.sh` trigger (shows live progress)
+- **System**: Hostname, IP, Go version, versions table, `update.sh` trigger (shows live progress)
 
 ---
 
@@ -565,16 +567,15 @@ curl -fsSL https://vibecodepc.com/install.sh | bash
 `install.sh` sequence:
 
 ```
-[1/8] Detecting system (OS, arch, hostname)...
-[2/8] Installing Node.js 20 LTS via nvm...        ← skipped if present
-[3/8] Installing pnpm & git...                     ← skipped if present
-[4/8] Cloning VibeCodePC into ~/.vibecodepc/app...
-[5/8] Installing dependencies & building...
-[6/8] Downloading cloudflared (arm64)...
-[7/8] Registering systemd services...
-      vibecodepc.service       → Node.js app :3000
+[1/7] Detecting system (OS, arch, hostname)...
+[2/7] Installing git and Docker...                 ← skipped if present
+[3/7] Downloading VibeCodePC binary (arm64)...     ← prebuilt Go binary from GitHub Releases
+[4/7] Downloading cloudflared (arm64)...
+[5/7] Creating data directory (~/.vibecodepc/)...
+[6/7] Registering systemd services...
+      vibecodepc.service       → Go binary :3000
       vibecodepc-tunnel.service → cloudflared quick tunnel → :3000
-[8/8] Starting services & waiting for tunnel URL...
+[7/7] Starting services & waiting for tunnel URL...
 
 ╔═══════════════════════════════════════════════════════╗
 ║  ✓ VibeCodePC is ready!                               ║
@@ -588,7 +589,9 @@ curl -fsSL https://vibecodepc.com/install.sh | bash
 ╚═══════════════════════════════════════════════════════╝
 ```
 
-`update.sh`: git pull + pnpm build + systemctl restart both services + print new version
+The installer downloads a prebuilt binary — **no Go compiler needed on the Pi**. Cross-compiled releases for `linux/arm64`, `linux/arm`, and `linux/amd64` are published to GitHub Releases via CI.
+
+`update.sh`: download latest binary + systemctl restart both services + print new version
 `uninstall.sh`: stop + disable services + rm app dir (warns before deleting, keeps projects)
 
 ---
@@ -598,25 +601,26 @@ curl -fsSL https://vibecodepc.com/install.sh | bash
 ### OpenCode Integration
 
 ```
-Browser (xterm.js) ──WS──► /ws/terminal/:projectId ──► node-pty ──► opencode
+Browser (xterm.js) ──WS──► /ws/terminal/:projectId ──► creack/pty ──► opencode
                    ◄──WS──                          ◄──── stdout
 ```
 
 - Config auto-written to `~/.config/opencode/config.json` from stored provider keys
 - Each project uses its own CWD, so opencode loads that project's context
 - Multiple browser tabs share the same PTY session for the same project
+- opencode is a Node.js app; Node.js is installed by the wizard's Step 6
 
 ### NanoClaw Integration
 
 ```
-AgentView ──POST /api/agent/message──► Fastify ──► nanoclaw SQLite (insert)
-          ◄─────── SSE stream ─────── Fastify ◄── SQLite poller 100 ms
-                                             ↑
+AgentView ──POST /api/agent/message──► Go server ──► nanoclaw SQLite (insert)
+          ◄─────── SSE stream ──────── Go server ◄── SQLite ticker 100 ms
+                                               ↑
                           nanoclaw container reads → Claude → writes response
 ```
 
 - nanoclaw's SQLite volume-mounted at `~/.vibecodepc/nanoclaw/data/`
-- Fastify accesses the file directly (same host filesystem)
+- Go server accesses the file directly (same host filesystem)
 - `web` registered as a virtual platform in nanoclaw post-clone patch
 
 ### GitHub OAuth Flow
@@ -626,14 +630,14 @@ Browser → GET /auth/github/start
        → 302 to github.com/login/oauth/authorize
        → user approves
        → github.com → GET /auth/github/callback?code=...
-       → Fastify exchanges code for token
+       → Go server exchanges code for token
        → token stored in keystore
        → 302 to /app/dashboard (or wizard step if mid-setup)
 ```
 
 - Scopes: `repo`, `read:user` (no write to user data)
 - Token refresh not needed (GitHub classic tokens don't expire unless revoked)
-- `git push` uses token via git credential helper written to `~/.gitconfig` per-machine
+- `git push` uses token via git credential helper written to `~/.vibecodepc/.gitconfig`
 
 ### Cloudflare Tunnel
 
@@ -641,7 +645,7 @@ Browser → GET /auth/github/start
 Internet ──► CF Edge ──► cloudflared ──► localhost:3000
 ```
 
-Two modes in `cloudflare.ts`:
+Two modes in `cloudflare.go`:
 - **Quick**: `cloudflared tunnel --url http://localhost:3000` (no account, ephemeral URL)
 - **Named**: `cloudflared tunnel --token <token>` (account required, stable URL)
 
@@ -655,8 +659,7 @@ GET /api/metrics/stream   →   SSE (text/event-stream)
   data: { cpu: 42, ramUsedMb: 1340, ramTotalMb: 2000, diskUsedGb: 12, diskTotalGb: 32, tempC: 52, uptimeS: 123456 }
 ```
 
-Server reads from `/proc/stat`, `/proc/meminfo`, `df`, `/sys/class/thermal/` every 2 seconds.
-`metrics.ts` store subscribes on dashboard mount, unsubscribes on unmount.
+Go server reads `/proc/stat`, `/proc/meminfo`, `df`, `/sys/class/thermal/` every 2 seconds via `time.Ticker`. SSE handler respects `r.Context().Done()` for cleanup on disconnect.
 
 ---
 
@@ -665,16 +668,13 @@ Server reads from `/proc/stat`, `/proc/meminfo`, `df`, `/sys/class/thermal/` eve
 ```env
 PORT=3000
 HOST=0.0.0.0
-NODE_ENV=production
+APP_ENV=production
 DATA_DIR=/home/pi/.vibecodepc/data
 
 # GitHub OAuth App (register at github.com/settings/developers)
 GITHUB_CLIENT_ID=<your_client_id>
 GITHUB_CLIENT_SECRET=<your_client_secret>
 GITHUB_REDIRECT_URI=http://localhost:3000/auth/github/callback
-
-# Derived at runtime
-MACHINE_KEY=<derived from hostname+MAC — never set manually>
 ```
 
 All AI provider keys are stored encrypted in SQLite, not in `.env`.
@@ -685,11 +685,11 @@ All AI provider keys are stored encrypted in SQLite, not in `.env`.
 
 - **Auth**: App is open on LAN by default (Raspberry Pi use case). After Cloudflare tunnel is active, enable optional password lock (bcrypt hash in SQLite) for internet exposure.
 - **GitHub token**: Stored AES-256-GCM encrypted. Only `repo` + `read:user` scopes — no org admin, no delete.
-- **Key encryption**: Machine-derived key (SHA256 of hostname + primary MAC). Never logged.
+- **Key encryption**: Machine-derived key (SHA256 of hostname + primary MAC). Never logged. Standard `crypto` package.
 - **Terminal isolation**: Each project gets its own PTY as the app user — not root.
 - **Docker socket**: Required for NanoClaw. Warn user on dashboard that docker group membership is equivalent to root.
 - **Cloudflare tunnel**: End-to-end encrypted by Cloudflare. Zero open ports on the Pi.
-- **Content Security Policy**: Fastify `@fastify/helmet` with CSP headers.
+- **Security headers**: Custom Chi middleware sets CSP, HSTS, X-Frame-Options, X-Content-Type-Options.
 - **Git credentials**: GitHub token written to `~/.vibecodepc/.gitconfig` (not global `~/.gitconfig`) and referenced via `GIT_CONFIG` env on git operations.
 
 ---
@@ -698,10 +698,10 @@ All AI provider keys are stored encrypted in SQLite, not in `.env`.
 
 | # | Milestone | Target |
 |---|---|---|
-| M1 | Foundation: server + Vue shell + GitHub OAuth | End of Week 1 |
+| M1 | Foundation: Go server + Vue shell + GitHub OAuth | End of Week 1 |
 | M2 | Full automated setup wizard (all 8 steps) | End of Week 2 |
 | M3 | OpenCode terminal embedded, per-project sessions | End of Week 3 |
 | M4 | NanoClaw chat + GitHub integration + GitPanel | End of Week 4–5 |
 | M5 | Real-time dashboard with metrics + activity feed | End of Week 5–6 |
 | M6 | Projects, Settings, polish, PWA | End of Week 6 |
-| M7 | One-line installer + systemd + update script | End of Week 7 |
+| M7 | One-line installer + prebuilt binaries + systemd | End of Week 7 |
