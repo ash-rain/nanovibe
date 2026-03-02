@@ -1,88 +1,88 @@
 name: Build & Release
 
 on:
-  push:
-    branches: [main]
+    push:
+        branches: [main]
 
 permissions:
-  contents: write
+    contents: write
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+    build:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.22"
+            - uses: actions/setup-go@v5
+              with:
+                  go-version: "1.22"
 
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10
+            - uses: pnpm/action-setup@v4
+              with:
+                  version: 10
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: pnpm
-          cache-dependency-path: client/pnpm-lock.yaml
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 20
+                  cache: pnpm
+                  cache-dependency-path: client/pnpm-lock.yaml
 
-      # ── Checks ──────────────────────────────────────
-      - name: Go vet
-        run: go vet ./...
+            # ── Checks ──────────────────────────────────────
+            - name: Go vet
+              run: go vet ./...
 
-      - name: Client install
-        run: cd client && pnpm install --frozen-lockfile
+            - name: Client install
+              run: cd client && pnpm install --frozen-lockfile
 
-      - name: Vue typecheck
-        run: cd client && pnpm exec vue-tsc --noEmit
+            - name: Vue typecheck
+              run: cd client && pnpm exec vue-tsc --noEmit
 
-      - name: ESLint
-        run: cd client && pnpm exec eslint src/
+            - name: ESLint
+              run: cd client && pnpm exec eslint src/
 
-      - name: Go tests
-        run: go test ./...
+            - name: Go tests
+              run: go test ./...
 
-      # ── Build client ────────────────────────────────
-      - name: Build client
-        run: cd client && pnpm build
+            # ── Build client ────────────────────────────────
+            - name: Build client
+              run: cd client && pnpm build
 
-      # ── Cross-compile binaries ──────────────────────
-      - name: Build linux/arm64
-        run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o dist/release/vibecodepc-arm64 ./server/main.go
+            # ── Cross-compile binaries ──────────────────────
+            - name: Build linux/arm64
+              run: CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o dist/release/vibecodepc-arm64 ./server/main.go
 
-      - name: Build linux/arm
-        run: CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -ldflags="-s -w" -o dist/release/vibecodepc-arm ./server/main.go
+            - name: Build linux/arm
+              run: CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -ldflags="-s -w" -o dist/release/vibecodepc-arm ./server/main.go
 
-      - name: Build linux/amd64
-        run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o dist/release/vibecodepc-amd64 ./server/main.go
+            - name: Build linux/amd64
+              run: CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o dist/release/vibecodepc-amd64 ./server/main.go
 
-      # ── Checksums ───────────────────────────────────
-      - name: Generate checksums
-        run: cd dist/release && sha256sum vibecodepc-* > checksums.txt
+            # ── Checksums ───────────────────────────────────
+            - name: Generate checksums
+              run: cd dist/release && sha256sum vibecodepc-* > checksums.txt
 
-      # ── Upload artifacts ────────────────────────────
-      - name: Upload release binaries
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-binaries
-          path: dist/release/
+            # ── Upload artifacts ────────────────────────────
+            - name: Upload release binaries
+              uses: actions/upload-artifact@v4
+              with:
+                  name: release-binaries
+                  path: dist/release/
 
-      # ── Create rolling release ──────────────────────
-      - name: Delete existing latest release
-        run: gh release delete latest --yes --cleanup-tag 2>/dev/null || true
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            # ── Create rolling release ──────────────────────
+            - name: Delete existing latest release
+              run: gh release delete latest --yes --cleanup-tag 2>/dev/null || true
+              env:
+                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Create latest release
-        run: |
-          gh release create latest \
-            --title "Latest Build" \
-            --notes "Automatic build from \`main\` — $(date -u +'%Y-%m-%d %H:%M UTC')" \
-            --prerelease \
-            dist/release/vibecodepc-arm64 \
-            dist/release/vibecodepc-arm \
-            dist/release/vibecodepc-amd64 \
-            dist/release/checksums.txt
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            - name: Create latest release
+              run: |
+                  gh release create latest \
+                    --title "Latest Build" \
+                    --notes "Automatic build from \`main\` — $(date -u +'%Y-%m-%d %H:%M UTC')" \
+                    --prerelease \
+                    dist/release/vibecodepc-arm64 \
+                    dist/release/vibecodepc-arm \
+                    dist/release/vibecodepc-amd64 \
+                    dist/release/checksums.txt
+              env:
+                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
