@@ -196,7 +196,7 @@ Both URLs are shown on the dashboard with copy buttons and QR codes.
 ## Updating
 
 ```bash
-~/.vibecodepc/app/scripts/update.sh
+~/.vibecodepc/update.sh
 ```
 
 Or from the app: Settings → System → "Check for Updates" → live progress log.
@@ -204,7 +204,7 @@ Or from the app: Settings → System → "Check for Updates" → live progress l
 ## Uninstalling
 
 ```bash
-~/.vibecodepc/app/scripts/uninstall.sh
+~/.vibecodepc/uninstall.sh
 ```
 
 Removes the app and systemd services. Does **not** delete your project directories.
@@ -214,7 +214,7 @@ Removes the app and systemd services. Does **not** delete your project directori
 ## Contributing
 
 ```bash
-# Prerequisites: Go 1.22+, pnpm, air (go install github.com/cosmtrek/air@latest)
+# Prerequisites: Go 1.22+, pnpm, air (go install github.com/air-verse/air@latest)
 
 # Development (no sudo needed — uses port 3000)
 make dev        # Go server :3000 (air hot reload) + Vite client :5173

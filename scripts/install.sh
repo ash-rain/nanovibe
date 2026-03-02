@@ -16,87 +16,185 @@ VIBECODEPC_VERSION="${VIBECODEPC_VERSION:-latest}"
 INSTALL_DIR="${HOME}/.vibecodepc"
 BIN_DIR="${INSTALL_DIR}/bin"
 DATA_DIR="${INSTALL_DIR}/data"
+LOG_DIR="${INSTALL_DIR}/logs"
+GITHUB_REPO="vibecodepc/vibecodepc"
 
-log() { echo -e "  ${DIM}${1}${RESET}"; }
+log()  { echo -e "     ${DIM}${1}${RESET}"; }
 step() { echo -e "  ${BOLD}${1}${RESET}"; }
-ok() { echo -e "  ${GREEN}✓${RESET}  ${1}"; }
+ok()   { echo -e "  ${GREEN}✓${RESET}  ${1}"; }
 warn() { echo -e "  ${AMBER}⚠${RESET}  ${1}"; }
-err() { echo -e "  ${RED}✗${RESET}  ${1}"; exit 1; }
+err()  { echo -e "  ${RED}✗${RESET}  ${1}"; exit 1; }
 
 echo ""
-echo -e "  ${BOLD}${VIOLET}VibeCodePC Installer${RESET}"
+echo -e "  ${BOLD}${VIOLET}VibeCodePC${RESET}  ${DIM}— AI coding station for Raspberry Pi${RESET}"
 echo ""
 echo -e "  ${DIM}┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄${RESET}"
 echo ""
 
-# Step 1: Detect system
-echo -ne "  ${DIM}[1/7]${RESET}  Detecting system...  "
+# ── 1. Detect system ────────────────────────────────────────────────────────
+echo -ne "  ${DIM}[1/7]${RESET}  Detecting system..."
 ARCH=$(uname -m)
+OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+
 case "${ARCH}" in
-  aarch64|arm64) ARCH_NAME="arm64" ;;
-  armv7l|armhf)  ARCH_NAME="arm" ;;
-  x86_64)        ARCH_NAME="amd64" ;;
+  aarch64|arm64) BIN_ARCH="arm64"; CF_ARCH="arm64" ;;
+  armv7l|armhf)  BIN_ARCH="arm";   CF_ARCH="arm"   ;;
+  x86_64)        BIN_ARCH="amd64"; CF_ARCH="amd64"  ;;
   *) err "Unsupported architecture: ${ARCH}" ;;
 esac
-OS=$(uname -s | tr '[:upper:]' '[:lower:]')
-echo -e "${DIM}${ARCH_NAME}, ${OS}${RESET}"
 
-# Step 2: Install dependencies
-echo -ne "  ${DIM}[2/7]${RESET}  Checking dependencies...  "
-DEPS_OK=true
-if ! command -v git &>/dev/null; then
-  echo "installing git..."
-  sudo apt-get install -y git &>/dev/null || err "Failed to install git"
-fi
-if ! command -v docker &>/dev/null; then
-  echo "installing docker..."
-  curl -fsSL https://get.docker.com | sh &>/dev/null || warn "Docker install failed - install manually"
-fi
-echo -e "${GREEN}git ✓  docker ✓${RESET}"
+echo -e "  ${DIM}${ARCH} (${OS})${RESET}"
 
-# Step 3: Download VibeCodePC
-echo -ne "  ${DIM}[3/7]${RESET}  Downloading VibeCodePC...  "
-mkdir -p "${BIN_DIR}" "${DATA_DIR}"
+# ── 2. Install system dependencies ─────────────────────────────────────────
+echo -ne "  ${DIM}[2/7]${RESET}  Checking dependencies..."
 
-if [ "${VIBECODEPC_VERSION}" = "latest" ]; then
-  DOWNLOAD_URL="https://github.com/vibecodepc/vibecodepc/releases/latest/download/vibecodepc-${ARCH_NAME}"
-else
-  DOWNLOAD_URL="https://github.com/vibecodepc/vibecodepc/releases/download/${VIBECODEPC_VERSION}/vibecodepc-${ARCH_NAME}"
-fi
+MISSING_DEPS=()
+command -v curl &>/dev/null || MISSING_DEPS+=("curl")
+command -v git  &>/dev/null || MISSING_DEPS+=("git")
 
-if curl -fsSL --progress-bar "${DOWNLOAD_URL}" -o "${BIN_DIR}/vibecodepc" 2>&1 | tail -1; then
-  chmod +x "${BIN_DIR}/vibecodepc"
-  echo -e "${GREEN}✓${RESET}"
-else
-  warn "Could not download from GitHub releases. Building from source or using local binary."
-  # Fallback: check if binary exists in PATH
-  if command -v vibecodepc &>/dev/null; then
-    cp "$(command -v vibecodepc)" "${BIN_DIR}/vibecodepc"
-    echo -e "${GREEN}✓ (local)${RESET}"
+if [ ${#MISSING_DEPS[@]} -gt 0 ]; then
+  echo ""
+  log "Installing: ${MISSING_DEPS[*]}"
+  if command -v apt-get &>/dev/null; then
+    sudo apt-get install -y "${MISSING_DEPS[@]}" -qq || err "Failed to install dependencies"
+  elif command -v apk &>/dev/null; then
+    sudo apk add "${MISSING_DEPS[@]}" >/dev/null || err "Failed to install dependencies"
   else
-    err "Could not obtain vibecodepc binary. Set VIBECODEPC_VERSION or build from source."
+    err "Please install: ${MISSING_DEPS[*]}"
   fi
 fi
 
-# Step 4: Download cloudflared
-echo -ne "  ${DIM}[4/7]${RESET}  Downloading cloudflared...  "
-CF_URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${ARCH_NAME}"
-curl -fsSL --progress-bar "${CF_URL}" -o "${BIN_DIR}/cloudflared" 2>&1 | tail -1 || warn "cloudflared download failed"
-chmod +x "${BIN_DIR}/cloudflared" 2>/dev/null || true
-echo -e "${GREEN}✓${RESET}"
+if ! command -v docker &>/dev/null; then
+  echo ""
+  log "Installing Docker..."
+  curl -fsSL https://get.docker.com | sh >/dev/null 2>&1 || warn "Docker install failed — install manually: https://docs.docker.com/engine/install/"
+  if command -v docker &>/dev/null && ! groups | grep -q docker; then
+    sudo usermod -aG docker "${USER}" || true
+    warn "Added ${USER} to docker group — re-login may be needed for Docker without sudo"
+  fi
+fi
 
-# Step 5: Create directories
-echo -ne "  ${DIM}[5/7]${RESET}  Creating directories...  "
-mkdir -p "${INSTALL_DIR}"/{data,logs,nanoclaw/data}
-echo -e "${GREEN}~/.vibecodepc/  ✓${RESET}"
+echo -e "  ${GREEN}ok${RESET}"
 
-# Step 6: Register services (systemd)
-echo -ne "  ${DIM}[6/7]${RESET}  Registering services...  "
+# ── 3. Download VibeCodePC binary ───────────────────────────────────────────
+echo -ne "  ${DIM}[3/7]${RESET}  Downloading VibeCodePC..."
+mkdir -p "${BIN_DIR}" "${DATA_DIR}" "${LOG_DIR}"
+
+if [ "${VIBECODEPC_VERSION}" = "latest" ]; then
+  DOWNLOAD_URL="https://github.com/${GITHUB_REPO}/releases/latest/download/vibecodepc-${BIN_ARCH}"
+else
+  DOWNLOAD_URL="https://github.com/${GITHUB_REPO}/releases/download/${VIBECODEPC_VERSION}/vibecodepc-${BIN_ARCH}"
+fi
+
+if curl -fsSL "${DOWNLOAD_URL}" -o "${BIN_DIR}/vibecodepc" 2>/dev/null; then
+  chmod +x "${BIN_DIR}/vibecodepc"
+  echo -e "  ${GREEN}ok${RESET}"
+else
+  # Check if a local binary is already present (re-install case)
+  if [ -x "${BIN_DIR}/vibecodepc" ]; then
+    echo -e "  ${DIM}(kept existing)${RESET}"
+  elif command -v vibecodepc &>/dev/null; then
+    cp "$(command -v vibecodepc)" "${BIN_DIR}/vibecodepc"
+    echo -e "  ${DIM}(from PATH)${RESET}"
+  else
+    err "Could not download vibecodepc. Check your internet connection or set VIBECODEPC_VERSION."
+  fi
+fi
+
+# ── 4. Download cloudflared ─────────────────────────────────────────────────
+echo -ne "  ${DIM}[4/7]${RESET}  Downloading cloudflared..."
+CF_URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${CF_ARCH}"
+
+if curl -fsSL "${CF_URL}" -o "${BIN_DIR}/cloudflared" 2>/dev/null; then
+  chmod +x "${BIN_DIR}/cloudflared"
+  echo -e "  ${GREEN}ok${RESET}"
+else
+  warn "Could not download cloudflared — tunnel will be unavailable"
+fi
+
+# Symlink cloudflared to /usr/local/bin so child processes can find it
+if [ -x "${BIN_DIR}/cloudflared" ]; then
+  sudo ln -sf "${BIN_DIR}/cloudflared" /usr/local/bin/cloudflared 2>/dev/null || true
+fi
+
+# ── 5. Install helper scripts ────────────────────────────────────────────────
+echo -ne "  ${DIM}[5/7]${RESET}  Installing helper scripts..."
+
+# update.sh — called by the in-app "Update" button
+cat > "${INSTALL_DIR}/update.sh" << 'UPDATESCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+INSTALL_DIR="${HOME}/.vibecodepc"
+BIN_DIR="${INSTALL_DIR}/bin"
+
+echo "Checking for updates..."
+ARCH=$(uname -m)
+case "${ARCH}" in
+  aarch64|arm64) BIN_ARCH="arm64" ;;
+  armv7l|armhf)  BIN_ARCH="arm"   ;;
+  x86_64)        BIN_ARCH="amd64" ;;
+  *) echo "Unsupported arch: ${ARCH}"; exit 1 ;;
+esac
+
+DOWNLOAD_URL="https://github.com/vibecodepc/vibecodepc/releases/latest/download/vibecodepc-${BIN_ARCH}"
+echo "Downloading new binary..."
+curl -fsSL "${DOWNLOAD_URL}" -o "${BIN_DIR}/vibecodepc.new"
+chmod +x "${BIN_DIR}/vibecodepc.new"
+mv "${BIN_DIR}/vibecodepc.new" "${BIN_DIR}/vibecodepc"
+echo "Restarting service..."
+systemctl --user restart vibecodepc 2>/dev/null || sudo systemctl restart vibecodepc 2>/dev/null || true
+echo "done: update complete"
+UPDATESCRIPT
+
+chmod +x "${INSTALL_DIR}/update.sh"
+
+# uninstall.sh
+cat > "${INSTALL_DIR}/uninstall.sh" << 'UNINSTALLSCRIPT'
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo ""
+echo "This will remove VibeCodePC and its config."
+echo "Your project directories will NOT be touched."
+echo ""
+read -p "Continue? [y/N] " confirm
+if [[ "${confirm}" != "y" && "${confirm}" != "Y" ]]; then
+  echo "Aborted."
+  exit 0
+fi
+
+echo "Stopping services..."
+sudo systemctl stop vibecodepc 2>/dev/null || pkill vibecodepc 2>/dev/null || true
+sudo systemctl disable vibecodepc 2>/dev/null || true
+sudo rm -f /etc/systemd/system/vibecodepc.service
+sudo rm -f /usr/local/bin/cloudflared
+sudo systemctl daemon-reload 2>/dev/null || true
+
+echo "Removing binaries and logs..."
+rm -rf "${HOME}/.vibecodepc/bin"
+rm -rf "${HOME}/.vibecodepc/logs"
+# data/ is preserved — user data is safe
+
+echo ""
+echo "VibeCodePC removed. Your projects are safe."
+echo ""
+UNINSTALLSCRIPT
+
+chmod +x "${INSTALL_DIR}/uninstall.sh"
+echo -e "  ${GREEN}ok${RESET}"
+
+# ── 6. Register as a system service ─────────────────────────────────────────
+echo -ne "  ${DIM}[6/7]${RESET}  Registering service..."
+
+SYS_PATH="${BIN_DIR}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
 if command -v systemctl &>/dev/null && [ -d /etc/systemd/system ]; then
-  cat > /tmp/vibecodepc.service << EOF
+  sudo tee /etc/systemd/system/vibecodepc.service > /dev/null << EOF
 [Unit]
 Description=VibeCodePC Server
-After=network.target
+Documentation=https://vibecodepc.com
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
@@ -104,54 +202,77 @@ User=${USER}
 ExecStart=${BIN_DIR}/vibecodepc
 Restart=always
 RestartSec=5
+StandardOutput=append:${LOG_DIR}/vibecodepc.log
+StandardError=append:${LOG_DIR}/vibecodepc.log
 Environment=PORT=3000
+Environment=HOST=0.0.0.0
 Environment=DATA_DIR=${DATA_DIR}
+Environment=PATH=${SYS_PATH}
 
 [Install]
 WantedBy=multi-user.target
 EOF
-  sudo mv /tmp/vibecodepc.service /etc/systemd/system/vibecodepc.service
+
   sudo systemctl daemon-reload
-  sudo systemctl enable vibecodepc &>/dev/null
-  sudo systemctl start vibecodepc
-  echo -e "${GREEN}vibecodepc ✓${RESET}"
+  sudo systemctl enable vibecodepc >/dev/null 2>&1
+  sudo systemctl restart vibecodepc
+  echo -e "  ${GREEN}ok (systemd)${RESET}"
+
 else
-  # No systemd — start directly in background
-  nohup "${BIN_DIR}/vibecodepc" > "${INSTALL_DIR}/logs/vibecodepc.log" 2>&1 &
-  echo -e "${GREEN}started (no systemd)${RESET}"
+  # No systemd — start in background with nohup
+  pkill -f "${BIN_DIR}/vibecodepc" 2>/dev/null || true
+  sleep 1
+  DATA_DIR="${DATA_DIR}" PORT=3000 HOST=0.0.0.0 PATH="${SYS_PATH}" \
+    nohup "${BIN_DIR}/vibecodepc" > "${LOG_DIR}/vibecodepc.log" 2>&1 &
+  echo -e "  ${GREEN}ok (background)${RESET}"
 fi
 
-# Step 7: Wait for tunnel URL
-echo -ne "  ${DIM}[7/7]${RESET}  Starting & waiting for tunnel URL...  "
+# ── 7. Wait for Cloudflare tunnel URL ───────────────────────────────────────
+echo -ne "  ${DIM}[7/7]${RESET}  Waiting for tunnel URL"
+
 TUNNEL_URL=""
-for i in {1..30}; do
-  sleep 1
-  TUNNEL_URL=$(curl -s http://localhost:3000/api/settings/tunnel 2>/dev/null | grep -o '"tunnelUrl":"[^"]*"' | cut -d'"' -f4 || true)
-  if [ -n "${TUNNEL_URL}" ] && [ "${TUNNEL_URL}" != "null" ]; then
+MAX_WAIT=45
+for i in $(seq 1 ${MAX_WAIT}); do
+  sleep 2
+  # Try to get the tunnel URL from the API
+  RESPONSE=$(curl -s --max-time 2 http://localhost:3000/api/settings/tunnel 2>/dev/null || true)
+  TUNNEL_URL=$(echo "${RESPONSE}" | grep -o '"tunnelUrl":"[^"]*"' | sed 's/"tunnelUrl":"//;s/"//' || true)
+  if [ -n "${TUNNEL_URL}" ] && [ "${TUNNEL_URL}" != "null" ] && [ "${TUNNEL_URL}" != "" ]; then
     break
   fi
-  echo -ne "●"
+  echo -ne "."
 done
 echo ""
 
+# ── Done ─────────────────────────────────────────────────────────────────────
 echo ""
 echo -e "  ${DIM}┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄${RESET}"
 echo ""
-echo -e "  ${GREEN}${BOLD}✓  VibeCodePC is running${RESET}"
+echo -e "  ${GREEN}${BOLD}VibeCodePC is running${RESET}"
 echo ""
 
-LOCAL_URL="http://$(hostname).local:3000"
-echo -e "     Local   →  ${BOLD}${LOCAL_URL}${RESET}"
+HOSTNAME_LOCAL=$(hostname 2>/dev/null || echo "raspberrypi")
+LOCAL_URL="http://${HOSTNAME_LOCAL}.local:3000"
+
+echo -e "     Local    →  ${BOLD}${LOCAL_URL}${RESET}"
+
 if [ -n "${TUNNEL_URL}" ]; then
-  echo -e "     Remote  →  ${BOLD}${TUNNEL_URL}${RESET}"
+  echo -e "     Remote   →  ${BOLD}${TUNNEL_URL}${RESET}"
 else
-  echo -e "     Remote  →  ${DIM}(starting tunnel...)${RESET}"
+  echo -e "     Remote   →  ${DIM}(tunnel starting — check the wizard in ~30s)${RESET}"
 fi
 
 echo ""
-echo -e "     Open Remote from any device to run the setup wizard."
-echo -e "     The Remote URL changes on reboot until you set up"
-echo -e "     a named tunnel — the wizard guides you through it."
+echo -e "  Open the URL above to run the setup wizard."
+
+if [ -z "${TUNNEL_URL}" ]; then
+  echo -e "  The Remote URL will appear in the wizard once the tunnel is ready."
+fi
+
 echo ""
+echo -e "  ${DIM}The Remote URL changes on reboot unless you configure a named"
+echo -e "  tunnel in the wizard (Cloudflare Zero Trust — free tier).${RESET}"
+echo ""
+echo -e "  ${DIM}Logs: ${LOG_DIR}/vibecodepc.log${RESET}"
 echo -e "  ${DIM}┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄${RESET}"
 echo ""

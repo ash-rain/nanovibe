@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useSetupStore } from '@/stores/setup'
 import { useSettingsStore } from '@/stores/settings'
@@ -17,8 +17,29 @@ const upgradeError = ref('')
 const showUpgrade = ref(false)
 const showQr = ref(false)
 
+let pollTimer: ReturnType<typeof setInterval> | null = null
+
 onMounted(async () => {
   await settingsStore.fetchTunnel()
+  // Poll every 3s until the tunnel URL appears (cloudflared takes ~10s to assign a URL)
+  if (!settingsStore.tunnel.connected) {
+    let attempts = 0
+    pollTimer = setInterval(async () => {
+      attempts++
+      await settingsStore.fetchTunnel()
+      if (settingsStore.tunnel.connected || attempts >= 20) {
+        clearInterval(pollTimer!)
+        pollTimer = null
+      }
+    }, 3000)
+  }
+})
+
+onUnmounted(() => {
+  if (pollTimer) {
+    clearInterval(pollTimer)
+    pollTimer = null
+  }
 })
 
 async function restart() {
