@@ -1,26 +1,38 @@
 # VibeCodePC.com
 
 **Turn any Raspberry Pi into a personal AI coding powerhouse.**
-Set it up once. Code from anywhere.
+One command installs everything. The app does the rest.
 
 ---
 
 ## What is this?
 
-VibeCodePC is a self-hosted web app that runs on your Raspberry Pi (or any Linux machine). It gives you:
-
-- A **guided setup wizard** that configures everything from scratch — Docker, Cloudflare tunnel, AI provider keys — no command line skills needed.
-- An **embedded AI coding environment** powered by [opencode](https://github.com/anomalyco/opencode) — a terminal-based AI coding agent that works with Claude, OpenAI, Gemini, or local models.
-- A **web chat interface** for [nanoclaw](https://github.com/qwibitai/nanoclaw) — a lightweight Claude-powered AI agent that can also connect to WhatsApp, Telegram, and more.
-- **Project management** — create, switch, and track all your coding projects in one place.
-- **AI provider key management** — securely store and rotate keys for every provider, system-wide.
-- **Remote access** via a free Cloudflare tunnel — no port forwarding, no static IP required.
+VibeCodePC is a self-hosted web application that transforms a Raspberry Pi (or any Linux machine) into a complete AI-assisted coding station. It installs itself, configures itself, and hands you a live URL — then guides you through the rest with an automated setup wizard.
 
 ---
 
-## Screenshots
+## Install
 
-> _Coming soon — wizard, IDE, and agent chat views._
+On your Raspberry Pi (or any Debian/Ubuntu machine):
+
+```bash
+curl -fsSL https://vibecodepc.com/install.sh | bash
+```
+
+The installer runs silently, then prints:
+
+```
+╔═══════════════════════════════════════════════════════╗
+║  ✓ VibeCodePC is ready!                               ║
+║                                                       ║
+║  Local   http://raspberrypi.local:3000                ║
+║  Remote  https://random-name.trycloudflare.com        ║
+║                                                       ║
+║  Open the Remote URL to run the setup wizard.         ║
+╚═══════════════════════════════════════════════════════╝
+```
+
+Open the Remote URL from **any device, anywhere** — your phone, laptop, a friend's computer. The setup wizard is already live.
 
 ---
 
@@ -28,140 +40,105 @@ VibeCodePC is a self-hosted web app that runs on your Raspberry Pi (or any Linux
 
 | Requirement | Minimum |
 |---|---|
-| Hardware | Raspberry Pi 4 (2 GB RAM+) or any Linux x86/ARM machine |
-| OS | Raspberry Pi OS (64-bit), Ubuntu 22.04+, Debian 12+ |
-| Node.js | 20 LTS or later |
-| Docker | 24+ (for NanoClaw agent container) |
-| Disk space | 5 GB free |
-| Network | Internet connection for setup |
+| Hardware | Raspberry Pi 4 (2 GB RAM) or any Linux x86/ARM machine |
+| OS | Raspberry Pi OS 64-bit, Ubuntu 22.04+, Debian 12+ |
+| Network | Internet connection for install |
 
----
-
-## Quick Install
-
-On your Raspberry Pi (or Linux machine), run:
-
-```bash
-curl -fsSL https://vibecodepc.com/install.sh | bash
-```
-
-The installer sets up everything — including a Cloudflare tunnel — and prints your access URLs at the end:
-
-```
-✓ VibeCodePC installed!
-
-  Local:   http://<your-pi-hostname>.local:3000
-  Remote:  https://<random>.trycloudflare.com   ← open this to run the setup wizard
-```
-
-Open the remote URL from any device to run the setup wizard. No need to be on the same network.
-
----
-
-## Manual Install
-
-```bash
-# Clone the repo
-git clone https://github.com/vibecodepc/app.git ~/.vibecodepc/app
-cd ~/.vibecodepc/app
-
-# Install dependencies
-npm install -g pnpm
-pnpm install
-
-# Build
-pnpm build
-
-# Start
-node server/dist/index.js
-```
-
-Open `http://localhost:3000` and follow the wizard.
+Everything else (Node.js, Docker, git, cloudflared) is installed automatically.
 
 ---
 
 ## Setup Wizard
 
-The first time you open the app, you'll be guided through 7 steps:
+Eight steps, almost entirely automated. Watch the progress bars — you're only needed for your API keys and GitHub login.
 
-| Step | What happens |
-|---|---|
-| Welcome | Overview of what VibeCodePC does |
-| System Check | Verifies Docker, Node.js, RAM, disk, and internet |
-| Cloudflare Tunnel | Optionally upgrade to a **stable named tunnel** — the quick tunnel is already running |
-| AI Providers | Enter API keys (Anthropic, OpenAI, Google, or Ollama) |
-| OpenCode | Installs the AI coding agent and picks your default model |
-| NanoClaw | (Optional) Sets up your personal AI assistant |
-| Complete | Both access URLs with copy buttons and QR codes |
+| Step | What the app does automatically | What you do |
+|---|---|---|
+| Welcome | Detects hostname, personalizes the greeting | Click "Start" |
+| System Check | Runs checks; offers one-click "Fix" for any failures (installs Docker, Node, git) | Watch / approve fixes |
+| Cloudflare Tunnel | Already running — shows live URL and QR code | Optionally upgrade to a stable named tunnel |
+| GitHub | OAuth connect flow | Click "Connect GitHub", approve in popup |
+| AI Providers | Scans env vars for existing keys, auto-tests each one | Paste any missing keys |
+| OpenCode | Auto-installs, auto-configures from your keys | Choose default AI provider |
+| NanoClaw | Auto-clones, auto-builds Docker image, auto-writes config | Optionally pair with WhatsApp/Telegram |
+| Complete | Shows both URLs with QR codes, confetti | Click "Open Dashboard" |
 
-After setup, you'll never need to touch the command line again.
+After the wizard, you never need the command line again.
 
 ---
 
 ## Features
 
-### AI Coding IDE
+### Real-Time Dashboard
 
-The IDE view embeds a full terminal running [opencode](https://github.com/anomalyco/opencode) — an AI coding agent that:
+A live command center that updates every 2 seconds — no page refresh:
 
-- Works with any AI provider (Claude, GPT-4, Gemini, local Ollama models)
-- Has full access to your project files
-- Can write, edit, run, and debug code with you
-- Runs in your browser — accessible from any device on your network (or remotely via your Cloudflare URL)
+- **Service cards**: opencode, NanoClaw, Cloudflare, Docker — each showing live status, key metrics, and quick-action buttons. Click any card to tail its live logs.
+- **System vitals**: CPU %, RAM, disk, Pi temperature, uptime — visualised as sparkline graphs
+- **GitHub activity feed**: recent pushes, PR opens, issue closes — straight from your account
+- **Quick launch**: your 4 most recently opened projects — one click to open in the IDE
+- **Access panel**: both your local and Cloudflare URLs with copy and QR code buttons
 
-Each project gets its own isolated opencode session.
+### Embedded AI Coding IDE
+
+Runs [opencode](https://github.com/anomalyco/opencode) — a full terminal AI coding agent:
+
+- In-browser terminal (xterm.js) connected over WebSocket to a real PTY on your Pi
+- Works with Claude, GPT-4, Gemini, or local Ollama models
+- Each project gets its own isolated session
+- Inline git panel: branch selector, staged/unstaged files, diff preview, commit & push
+
+### GitHub Integration
+
+GitHub is a first-class citizen:
+
+- **Repo browser**: search and browse all your GitHub repos with language badges, stars, last-pushed
+- **One-click import**: clone any repo directly from the UI → auto-creates a project
+- **Activity feed**: recent events from your account — pushes, PR opens/merges, issues
+- **PR creation**: create pull requests from the current branch without leaving the app
+- **In-IDE git panel**: full git workflow (status, diff, commit, push, pull, branch switch) in a collapsible sidebar
 
 ### AI Agent Chat
 
-The Agent view gives you a clean web chat interface to [nanoclaw](https://github.com/qwibitai/nanoclaw) — a personal Claude-powered agent that:
+A web chat interface backed by [nanoclaw](https://github.com/qwibitai/nanoclaw) — a Claude-powered agent:
 
-- Answers questions, helps you plan features, reviews code
-- Can also connect to WhatsApp, Telegram, Discord, and more
-- Runs in a secure Docker container
-- Remembers context per conversation
+- Chat UI with markdown rendering and syntax-highlighted code blocks
+- Context-aware: associate chats with a specific project
+- Optionally also connects to WhatsApp, Telegram, Discord, or Slack
+- Runs in an isolated Docker container
 
 ### Project Management
 
-- Create new projects with one click (optionally clone a Git repo)
-- See git branch, last commit, and disk usage at a glance
-- Switch between projects instantly — each gets its own AI coding session
+- Project grid: name, language, git branch, ahead/behind count, last opened
+- New projects: create from a local path or import from GitHub
+- Instant switch: click any project to jump straight into the IDE
 
 ### AI Key Management
 
-- Store API keys for Anthropic, OpenAI, Google, and Ollama
-- Keys are encrypted with AES-256-GCM using a machine-derived key
-- Test any key with a live provider check
-- Rotate or remove keys from the UI anytime
-
-### Dual Access — LAN + Internet
-
-The app runs on **port 3000** and is reachable two ways from day one:
-
-| Method | URL | Notes |
-|---|---|---|
-| Local network | `http://<hostname>.local:3000` | Zero-latency on your home/office LAN |
-| Cloudflare tunnel | `https://<random>.trycloudflare.com` | Internet access, set up by the installer automatically |
-
-The installer starts a **Cloudflare quick tunnel** (no account needed) and prints the URL. You can optionally upgrade to a **named tunnel** in the wizard for a stable URL on your own domain.
-
-Both URLs are live simultaneously and shown on the dashboard with copy buttons and QR codes.
+- Support for Anthropic, OpenAI, Google Gemini, and Ollama
+- Keys auto-detected from environment variables and tested immediately
+- AES-256-GCM encrypted at rest with a machine-derived key
+- Rotate or remove any key from Settings anytime
 
 ---
 
 ## Architecture
 
 ```
-http://<hostname>.local:3000              (LAN)
-https://<tunnel>.trycloudflare.com        (internet, via cloudflared quick/named tunnel)
-           │
-           │  HTTP / WebSocket / SSE
-           ▼
-     Fastify Server :3000
-           │
-           ├── OpenCode (node-pty) ──► terminal sessions per project
-           ├── NanoClaw (Docker) ───► AI agent in isolated container
-           ├── cloudflared ────────► Cloudflare tunnel → :3000
-           └── SQLite ─────────────► projects, settings, messages
+http://raspberrypi.local:3000        (LAN, instant)
+https://<tunnel>.trycloudflare.com   (internet, via cloudflared — set up by installer)
+              │
+              │  HTTP / WebSocket / SSE
+              ▼
+        Fastify Server :3000
+              │
+              ├── opencode (node-pty)  ─► per-project terminal sessions
+              ├── NanoClaw (Docker)    ─► Claude agent, SQLite bridge
+              ├── GitHub Service       ─► Octokit OAuth + repo/PR API
+              ├── Git Service          ─► simple-git per-project operations
+              ├── Metrics Service      ─► CPU/RAM/disk/temp SSE stream
+              ├── cloudflared          ─► quick or named tunnel → :3000
+              └── SQLite              ─► projects, settings, messages, auth
 ```
 
 ---
@@ -173,21 +150,39 @@ https://<tunnel>.trycloudflare.com        (internet, via cloudflared quick/named
 | Frontend | Vue 3, Vite, Tailwind CSS v4, Pinia |
 | Backend | Node.js 20, Fastify v5, TypeScript |
 | Terminal | xterm.js + node-pty |
+| Git | simple-git |
+| GitHub API | Octokit (`@octokit/rest`) |
 | Database | SQLite (better-sqlite3) |
 | AI Coding | opencode (anomalyco/opencode) |
 | AI Agent | nanoclaw (qwibitai/nanoclaw) |
 | Tunneling | cloudflared (Cloudflare free tier) |
-| Container | Docker |
+| Containers | Docker |
+
+---
+
+## Dual Access — LAN + Internet
+
+The app is reachable two ways simultaneously, from the moment the installer completes:
+
+| Method | URL | Notes |
+|---|---|---|
+| Local network | `http://<hostname>.local:3000` | Zero-latency on your LAN |
+| Cloudflare tunnel | `https://<random>.trycloudflare.com` | Internet access, set up automatically |
+
+The installer starts a **Cloudflare quick tunnel** (no account required). During the wizard you can optionally upgrade to a **named tunnel** (free Cloudflare account) for a stable URL across reboots.
+
+Both URLs are shown on the dashboard with copy buttons and QR codes.
 
 ---
 
 ## Security
 
-- **Keys never leave your machine** — encrypted at rest with a machine-derived key
-- **Cloudflare tunnel** provides end-to-end encryption — no open ports needed
-- **Terminal isolation** — each project runs in its own sandboxed process
-- **NanoClaw in Docker** — agent executes in an isolated container
-- **Optional password lock** — protect the web UI with a bcrypt-hashed password
+- **Keys encrypted**: AES-256-GCM with a machine-derived key (never stored or logged)
+- **GitHub token**: minimal scopes (`repo`, `read:user`); stored encrypted
+- **Cloudflare tunnel**: end-to-end TLS; zero open ports on your Pi
+- **Terminal isolation**: each project's opencode runs as the app user in its own PTY
+- **Docker isolation**: NanoClaw agent runs in a Docker container
+- **Optional password lock**: protect the web UI with a bcrypt password (Settings → System)
 
 ---
 
@@ -197,9 +192,7 @@ https://<tunnel>.trycloudflare.com        (internet, via cloudflared quick/named
 ~/.vibecodepc/app/scripts/update.sh
 ```
 
-Or from the Settings view → System → "Check for Updates".
-
----
+Or from the app: Settings → System → "Check for Updates" → live progress log.
 
 ## Uninstalling
 
@@ -207,32 +200,32 @@ Or from the Settings view → System → "Check for Updates".
 ~/.vibecodepc/app/scripts/uninstall.sh
 ```
 
-This removes the app and systemd service but **does not delete your projects**.
-
----
-
-## Roadmap
-
-- [ ] Password-protected web UI
-- [ ] Multiple Cloudflare tunnels per project
-- [ ] VS Code extension mode (opencode as LSP)
-- [ ] Mobile-optimized chat view (PWA)
-- [ ] Agent-to-agent collaboration (nanoclaw swarms)
-- [ ] One-click project templates (Python, TypeScript, Rust, etc.)
-- [ ] GitHub/GitLab integration (PR creation, issue linking)
-- [ ] Usage dashboard (token counts, costs per provider)
+Removes the app and systemd services. Does **not** delete your project directories.
 
 ---
 
 ## Contributing
 
-PRs welcome. See [PLAN.md](./PLAN.md) for the development roadmap and [CLAUDE.md](./CLAUDE.md) for coding conventions.
-
 ```bash
-# Development setup (no sudo needed — dev defaults to port 3000)
+# Development (no sudo needed — uses port 3000)
 pnpm install
-pnpm dev        # Server on :3000, Vite client on :5173
+pnpm dev        # Server :3000, Vite client :5173
 ```
+
+See [PLAN.md](./PLAN.md) for the full development roadmap and [CLAUDE.md](./CLAUDE.md) for coding conventions.
+
+---
+
+## Roadmap
+
+- [ ] Password-protected web UI (bcrypt + session cookie)
+- [ ] VS Code extension mode (opencode LSP integration)
+- [ ] Mobile-optimised PWA (add-to-homescreen)
+- [ ] Agent swarms (nanoclaw multi-agent collaboration)
+- [ ] One-click project templates (Next.js, FastAPI, Rust, etc.)
+- [ ] GitHub Actions status in dashboard
+- [ ] Token usage + cost tracking per provider
+- [ ] Multi-user support (per-user API keys + project isolation)
 
 ---
 
@@ -242,4 +235,4 @@ MIT — build something amazing.
 
 ---
 
-_Built with ❤️ for makers, hackers, and anyone who wants to vibe-code from their Pi._
+_Built for makers, hackers, and anyone who wants to vibe-code from their Pi._

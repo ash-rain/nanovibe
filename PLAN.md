@@ -7,7 +7,20 @@
 
 ## Vision
 
-VibeCodePC.com is a self-hosted web application that transforms a Raspberry Pi (or any Linux machine) into a personal AI coding station. It exposes a polished web UI that walks the user through device setup, then provides a unified dashboard for managing AI-powered coding sessions, a conversational AI agent, projects, and API keys — all accessible remotely via a free Cloudflare tunnel.
+VibeCodePC.com transforms a Raspberry Pi (or any Linux machine) into a fully self-hosted AI coding station. The experience is opinionated and automated: the installer does the heavy lifting, the setup wizard configures itself wherever possible, and the dashboard gives a real-time command center for every aspect of the system. GitHub is a first-class citizen — repos are browsable, projects spawn from a single click, and git operations happen from inside the app. No command line required after install.
+
+---
+
+## Automation Philosophy
+
+Every interaction follows one rule: **the app should do the work, not the user.**
+
+- **Auto-detect**: system capabilities, installed tools, existing API keys in env vars, GitHub identity
+- **Auto-install**: missing dependencies (Docker, Node) with live terminal progress
+- **Auto-configure**: opencode and nanoclaw from stored provider keys — no manual config files
+- **Auto-advance**: wizard steps complete themselves when all checks pass; user just watches
+- **Auto-fix**: every failing check has a one-click "Fix it" action that runs and re-checks
+- **Auto-reconnect**: tunnels, WebSocket connections, and services restart themselves silently
 
 ---
 
@@ -16,17 +29,20 @@ VibeCodePC.com is a self-hosted web application that transforms a Raspberry Pi (
 | Layer | Technology |
 |---|---|
 | Frontend | Vue 3, Vite, Tailwind CSS v4, Pinia, Vue Router |
-| Terminal embed | xterm.js + xterm-addon-fit + xterm-addon-web-links |
+| Terminal embed | `@xterm/xterm` + `@xterm/addon-fit` + `@xterm/addon-web-links` |
 | Backend | Node.js 20+, Fastify v5, TypeScript |
-| WebSockets | `@fastify/websocket` (terminal I/O, agent chat) |
+| WebSockets | `@fastify/websocket` (terminal I/O, live metrics) |
+| SSE | Native Fastify streams (agent chat, log tailing, install progress) |
 | Database | SQLite via `better-sqlite3` |
-| Process mgmt | `node-pty` (OpenCode terminal sessions) |
+| Process mgmt | `node-pty` (opencode terminal sessions) |
 | Docker mgmt | Dockerode |
+| Git operations | `simple-git` (status, diff, commit, push, pull, branches) |
+| GitHub API | Octokit REST (`@octokit/rest`) + OAuth flow |
 | Key storage | AES-256-GCM encrypted fields in SQLite |
-| Tunneling | cloudflared (Cloudflare Tunnel binary) |
+| Tunneling | cloudflared (Cloudflare Tunnel binary, quick + named modes) |
 | AI Coding | opencode (anomalyco/opencode) |
 | AI Agent | nanoclaw (qwibitai/nanoclaw) |
-| Installer | Bash script + optional Docker Compose |
+| Installer | Bash script + systemd unit files |
 
 ---
 
@@ -35,31 +51,31 @@ VibeCodePC.com is a self-hosted web application that transforms a Raspberry Pi (
 ```
 Browser (Vue 3)
      │
-     │  HTTP / WebSocket
+     │  HTTP / WebSocket / SSE
      ▼
-Fastify Server (Node.js)
-     ├── /api/setup        ← Setup wizard state machine
-     ├── /api/projects     ← Project CRUD
-     ├── /api/settings     ← AI keys & config
-     ├── /api/agent        ← NanoClaw bridge (SSE + POST)
-     ├── /ws/terminal/:id  ← xterm.js ↔ node-pty ↔ opencode
-     └── /* (SPA)          ← Serves Vue build
+Fastify Server :3000
+     ├── /api/setup          ← Wizard state machine + auto-run actions
+     ├── /api/projects       ← Project CRUD + git status
+     ├── /api/github         ← OAuth flow, repo browser, PR creation
+     ├── /api/settings       ← AI keys, tunnel config, system info
+     ├── /api/agent          ← NanoClaw bridge (SSE + POST)
+     ├── /api/metrics/stream ← SSE: CPU/RAM/disk/temp every 2 s
+     ├── /ws/terminal/:id    ← xterm.js ↔ node-pty ↔ opencode
+     ├── /auth/github        ← GitHub OAuth callback
+     └── /* (SPA)            ← Serves Vue build
      │
-     ├── OpenCode Service
-     │     └── node-pty spawns `opencode` per project
-     │
-     ├── NanoClaw Service
-     │     ├── Dockerode manages container lifecycle
-     │     └── SQLite bridge for web chat ↔ nanoclaw queue
-     │
-     ├── Cloudflare Tunnel Service
-     │     └── Spawns cloudflared process, monitors status
-     │
+     ├── OpenCode Service     — node-pty sessions per project
+     ├── NanoClaw Service     — Dockerode + SQLite bridge
+     ├── GitHub Service       — Octokit, OAuth token, repo/PR API
+     ├── Git Service          — simple-git per-project operations
+     ├── Metrics Service      — /proc + os module poller
+     ├── Cloudflare Service   — quick tunnel / named tunnel process
      └── SQLite DB
            ├── setup_state
            ├── projects
            ├── settings (encrypted keys)
-           └── agent_messages
+           ├── agent_messages
+           └── github_auth
 ```
 
 ---
@@ -74,88 +90,108 @@ vibecodepc/
 ├── package.json              # Workspace root (pnpm workspaces)
 ├── pnpm-workspace.yaml
 │
-├── server/                   # Fastify backend
+├── server/
 │   ├── package.json
 │   ├── tsconfig.json
 │   └── src/
-│       ├── index.ts          # Server entry point
-│       ├── config.ts         # Env vars & defaults
+│       ├── index.ts
+│       ├── config.ts
 │       ├── db/
-│       │   ├── index.ts      # better-sqlite3 singleton
-│       │   ├── schema.ts     # Table definitions & migrations
-│       │   └── crypto.ts     # AES-256-GCM key encryption helpers
+│       │   ├── index.ts
+│       │   ├── schema.ts
+│       │   └── crypto.ts
 │       ├── routes/
-│       │   ├── setup.ts      # GET/POST /api/setup
-│       │   ├── projects.ts   # CRUD /api/projects
-│       │   ├── settings.ts   # /api/settings (keys, providers)
-│       │   ├── agent.ts      # /api/agent (SSE stream + POST message)
-│       │   └── terminal.ts   # WS /ws/terminal/:projectId
+│       │   ├── setup.ts      # Wizard state + auto-action SSE streams
+│       │   ├── projects.ts   # CRUD + git status per project
+│       │   ├── github.ts     # OAuth, repo list, PR create, webhooks
+│       │   ├── settings.ts   # AI keys, tunnel, system info
+│       │   ├── agent.ts      # NanoClaw SSE stream + POST
+│       │   ├── metrics.ts    # SSE: real-time system vitals
+│       │   └── terminal.ts   # WS terminal sessions
 │       └── services/
-│           ├── setup.ts      # Wizard step state machine
-│           ├── system-check.ts # Checks: Docker, Node, disk, RAM
-│           ├── opencode.ts   # Install, launch, kill opencode per project
-│           ├── nanoclaw.ts   # Clone, configure, Docker run nanoclaw
-│           ├── cloudflare.ts # Download cloudflared, tunnel lifecycle
-│           └── keystore.ts   # Encrypt/decrypt AI provider keys
+│           ├── setup.ts        # Step state machine + auto-run logic
+│           ├── system-check.ts # Checks + auto-installers (Docker, Node)
+│           ├── opencode.ts     # Install, launch, kill sessions
+│           ├── nanoclaw.ts     # Clone, configure, Docker lifecycle
+│           ├── cloudflare.ts   # Quick/named tunnel process manager
+│           ├── github.ts       # Octokit client, OAuth, repo/PR API
+│           ├── git.ts          # simple-git per-project operations
+│           ├── metrics.ts      # CPU/RAM/disk/temp reader
+│           └── keystore.ts     # AES-256-GCM key store
 │
-├── client/                   # Vue 3 frontend
+├── client/
 │   ├── package.json
 │   ├── vite.config.ts
 │   ├── tailwind.config.ts
-│   ├── index.html
 │   └── src/
 │       ├── main.ts
 │       ├── App.vue
-│       ├── router/
-│       │   └── index.ts      # Vue Router – guards setup completion
+│       ├── router/index.ts
 │       ├── stores/
-│       │   ├── setup.ts      # Pinia: wizard step & state
-│       │   ├── projects.ts   # Pinia: project list & active
-│       │   ├── settings.ts   # Pinia: provider config
-│       │   └── agent.ts      # Pinia: chat messages & connection
+│       │   ├── setup.ts        # Wizard step & auto-run state
+│       │   ├── projects.ts     # Projects list, active, git status
+│       │   ├── settings.ts     # Provider config, tunnel state
+│       │   ├── agent.ts        # Chat messages, SSE connection
+│       │   ├── github.ts       # Auth state, repos, PRs, activity
+│       │   └── metrics.ts      # Live CPU/RAM/disk/temp
 │       ├── views/
 │       │   ├── setup/
-│       │   │   ├── WizardLayout.vue    # Progress bar shell
-│       │   │   ├── StepWelcome.vue     # What is VibeCodePC?
-│       │   │   ├── StepSystemCheck.vue # Docker / RAM / disk checks
-│       │   │   ├── StepCloudflare.vue  # Tunnel token input & status
-│       │   │   ├── StepProviders.vue   # AI API key entry
-│       │   │   ├── StepOpenCode.vue    # Install opencode, pick default
-│       │   │   ├── StepNanoClaw.vue    # Agent name, whatsapp pairing
-│       │   │   └── StepComplete.vue    # 🎉 Launch dashboard
-│       │   ├── DashboardView.vue       # Service status grid
-│       │   ├── IDEView.vue             # Embedded opencode terminal
-│       │   ├── AgentView.vue           # NanoClaw web chat
-│       │   ├── ProjectsView.vue        # Project browser/creator
-│       │   └── SettingsView.vue        # Keys, providers, tunnel
+│       │   │   ├── WizardLayout.vue      # Progress rail + step shell
+│       │   │   ├── StepWelcome.vue       # Animated hero
+│       │   │   ├── StepSystemCheck.vue   # Auto-running checks + fix buttons
+│       │   │   ├── StepCloudflare.vue    # Tunnel status + optional upgrade
+│       │   │   ├── StepGitHub.vue        # GitHub OAuth connect
+│       │   │   ├── StepProviders.vue     # AI key entry + auto-detect
+│       │   │   ├── StepOpenCode.vue      # Auto-install + live progress
+│       │   │   ├── StepNanoClaw.vue      # Auto-setup + messaging QR
+│       │   │   └── StepComplete.vue      # Confetti + launch
+│       │   ├── DashboardView.vue         # Real-time command center
+│       │   ├── IDEView.vue               # Embedded opencode terminal
+│       │   ├── AgentView.vue             # NanoClaw web chat
+│       │   ├── ProjectsView.vue          # Project browser
+│       │   ├── GitHubView.vue            # Repo browser + PR management
+│       │   └── SettingsView.vue          # All settings tabs
 │       └── components/
 │           ├── layout/
-│           │   ├── AppSidebar.vue
-│           │   ├── AppTopbar.vue
-│           │   └── ServiceStatusBar.vue
+│           │   ├── AppShell.vue          # Sidebar + topbar wrapper
+│           │   ├── AppSidebar.vue        # Nav + live service dots
+│           │   ├── AppTopbar.vue         # Tunnel URL, GitHub avatar
+│           │   └── MobileNav.vue         # Bottom nav for mobile
+│           ├── dashboard/
+│           │   ├── ServiceCard.vue       # Per-service status + actions
+│           │   ├── VitalsGraph.vue       # Sparkline CPU/RAM over time
+│           │   ├── ActivityFeed.vue      # GitHub + agent activity
+│           │   ├── QuickLaunch.vue       # Recent projects grid
+│           │   └── AccessPanel.vue       # URLs + QR codes
 │           ├── terminal/
-│           │   └── TerminalPane.vue    # xterm.js wrapper
+│           │   └── TerminalPane.vue
 │           ├── agent/
 │           │   ├── ChatBubble.vue
 │           │   ├── ChatInput.vue
 │           │   └── AgentStatus.vue
 │           ├── projects/
-│           │   ├── ProjectCard.vue
-│           │   └── NewProjectModal.vue
+│           │   ├── ProjectCard.vue       # Card with git badge, branch, status
+│           │   ├── NewProjectModal.vue   # Local or GitHub import
+│           │   └── GitPanel.vue          # Status, diff, commit, push/pull
+│           ├── github/
+│           │   ├── RepoCard.vue
+│           │   ├── PrCard.vue
+│           │   └── CommitList.vue
 │           └── ui/
-│               ├── StatusBadge.vue
-│               ├── KeyInput.vue        # Masked API key field
-│               ├── CheckItem.vue       # System check row
-│               └── StepIndicator.vue
+│               ├── StatusBadge.vue       # Pulsing dot + label
+│               ├── KeyInput.vue          # Masked key field
+│               ├── CheckItem.vue         # Check row with auto-fix
+│               ├── StepIndicator.vue     # Wizard progress rail
+│               ├── Sparkline.vue         # Tiny SVG graph
+│               └── QrCode.vue            # Inline QR from URL
 │
 ├── docker/
-│   ├── docker-compose.yml    # Optional: run whole stack in Docker
-│   └── nanoclaw/
-│       └── Dockerfile        # Nanoclaw container wrapper
+│   ├── docker-compose.yml
+│   └── nanoclaw/Dockerfile
 │
 └── scripts/
-    ├── install.sh            # One-line installer for Raspberry Pi
-    ├── update.sh             # Pull latest & restart
+    ├── install.sh
+    ├── update.sh
     └── uninstall.sh
 ```
 
@@ -165,81 +201,150 @@ vibecodepc/
 
 ### Phase 1 — Foundation (Week 1)
 
-**Goal**: Bare-metal server + Vue shell running locally.
+**Goal**: Server + Vue shell with auth skeleton running.
 
-- [ ] Init pnpm workspace with `server/` and `client/` packages
-- [ ] Configure TypeScript strict mode in both packages
-- [ ] Fastify server with static file serving of Vue build
-- [ ] SQLite schema: `setup_state`, `projects`, `settings`, `agent_messages`
-- [ ] Vue 3 + Vite + Tailwind CSS v4 scaffold
-- [ ] Vue Router with two root guards: `/setup/*` and `/app/*`
-- [ ] Setup wizard shell: `WizardLayout` with `StepIndicator`
-- [ ] Pinia store for wizard state, persisted to server on each step
-- [ ] Dev proxy: Vite → Fastify for API calls during development
-- [ ] ESLint + Prettier config (shared rules)
+- [ ] pnpm workspace: `server/` + `client/` packages, shared tsconfig
+- [ ] Fastify server: static file serving, CORS for dev, `@fastify/helmet`
+- [ ] SQLite schema: all 5 tables (see CLAUDE.md), migrations on boot
+- [ ] Vue 3 + Vite + Tailwind CSS v4 scaffold with design tokens
+- [ ] Vue Router: `/setup/*` and `/app/*` root guards; setup-completion check on boot
+- [ ] Wizard shell: `WizardLayout` with animated step rail
+- [ ] Pinia stores: skeleton for all 6 domains
+- [ ] GitHub OAuth App registration in config: `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`
+- [ ] `/auth/github` callback route + token storage in keystore
+- [ ] `useFetch` composable (base URL from env, auto JSON, error normalisation)
+- [ ] ESLint + Prettier shared config
+- [ ] Dev proxy: Vite → Fastify for `/api/*`, `/ws/*`, `/auth/*`
 
-**Deliverable**: `pnpm dev` boots the wizard UI.
+**Deliverable**: `pnpm dev` shows the wizard welcome screen; GitHub OAuth round-trip works.
 
 ---
 
 ### Phase 2 — Setup Wizard (Week 2)
 
-**Goal**: Full working wizard that actually configures the device.
+**Goal**: Fully automated wizard that configures the device with minimal user input.
+
+The wizard tracks state server-side. On load it restores the user to their last step. Each step fires its checks/installs automatically on mount — the user watches progress, not drives it.
+
+---
 
 #### Step 1 — Welcome
-- Animated hero: Raspberry Pi + code terminal visual
-- Explains what VibeCodePC does in 30 seconds
-- "Let's go" CTA
 
-#### Step 2 — System Check (`system-check.ts`)
-- Check: Docker installed & running → `docker info`
-- Check: Node.js ≥ 20 → `process.version`
-- Check: Available RAM ≥ 1 GB
-- Check: Available disk ≥ 5 GB
-- Check: Internet connectivity → fetch `1.1.1.1`
-- Each check has pass/fail/pending state with animated spinner
-- Cannot proceed until all critical checks pass
+- Full-screen animated hero: orbiting tool icons (Docker, GitHub, Claude, opencode) around a Raspberry Pi
+- Three-line pitch: "Your Pi. Your AI. Your code."
+- Auto-detect hostname → personalised greeting: "Let's set up **raspberrypi.local**"
+- "Start Setup" button — instantly moves to Step 2
 
-#### Step 3 — Cloudflare Tunnel
-- The quick tunnel (`*.trycloudflare.com`) is **already running** from the installer
-- This step shows its status and URL, and offers an optional upgrade to a named tunnel:
-  - UI: Link to `dash.cloudflare.com` → guide to create a named free tunnel
-  - Token input field → validate with `cloudflared tunnel --token <t> info`
-  - Store token encrypted in SQLite; cloudflared restarts in named-tunnel mode
-  - Named tunnel gives a stable URL that survives reboots
-- Skippable — quick tunnel is sufficient for personal use
-- Show both access URLs at all times:
-  - Local: `http://<hostname>.local:3000` (LAN, instant)
-  - Public: `https://<tunnel>.trycloudflare.com` (internet, Cloudflare-secured)
+---
 
-#### Step 4 — AI Providers
-- Provider cards: Anthropic (required for NanoClaw), OpenAI, Google Gemini, Ollama (local)
-- Per-provider: API key input (masked), test button → validates via provider's `/models` endpoint
-- At least one provider must be configured
-- Anthropic key flagged as "Recommended – powers the AI agent"
+#### Step 2 — System Check (fully automated)
 
-#### Step 5 — OpenCode
-- Install opencode: `npm install -g opencode` (shows live stdout)
-- Select default AI provider for opencode sessions
-- Verify: `opencode --version`
-- Show ASCII opencode logo in terminal preview
+`system-check.ts` runs all checks in parallel on mount. Each check row animates through pending → running → pass/fail.
 
-#### Step 6 — NanoClaw (Optional)
-- Skip-able step for users who only want the IDE
-- Clone `qwibitai/nanoclaw` into `~/.vibecodepc/nanoclaw/`
-- Configure `.env` from stored API keys
-- Show QR code / pairing URL for WhatsApp (via Baileys)
-- Or select Telegram/Discord/Slack channel
-- Start nanoclaw Docker container
+| Check | Auto-fix available? |
+|---|---|
+| Node.js ≥ 20 | Yes — install via nvm (SSE log stream) |
+| Docker installed | Yes — install Docker Engine (SSE log stream) |
+| Docker daemon running | Yes — `sudo systemctl start docker` |
+| RAM ≥ 1 GB | No — display warning only |
+| Disk ≥ 5 GB free | No — show usage, proceed with warning |
+| Internet (fetch `1.1.1.1`) | No — must fix externally |
+| `git` installed | Yes — `apt-get install -y git` |
 
-#### Step 7 — Complete
-- Confetti animation
-- Summary card showing both access methods:
-  - Local network: `http://<hostname>.local`
-  - Cloudflare tunnel: `https://<tunnel>.trycloudflare.com`
-- Copy button + QR code for each URL
-- Active providers summary, agent status
-- "Open Dashboard" → `/app/dashboard`
+**Auto-fix flow**:
+- User clicks "Fix" on a failing row
+- `POST /api/setup/fix/:checkId` opens an SSE stream
+- Terminal-style log scrolls in the check row
+- On completion, check re-runs automatically
+- Row transitions to pass with a green checkmark
+
+**Auto-advance**: when all critical checks pass, a 1-second countdown starts and the step advances automatically (user can cancel).
+
+---
+
+#### Step 3 — Cloudflare Tunnel (status display)
+
+The quick tunnel is already running from the installer. This step is purely informational + optional upgrade.
+
+- Live status card: `cloudflared` PID, uptime, current URL
+- Animated "tunnel connected" graphic: packets flowing Pi → Cloudflare → globe
+- Two URL pills with copy + QR:
+  - Local: `http://<hostname>.local:3000`
+  - Remote: `https://<random>.trycloudflare.com`
+- **Optional upgrade section** (collapsed by default):
+  - "Get a stable URL" → expands guide to create named tunnel on `dash.cloudflare.com`
+  - Token input → validates live → restarts cloudflared → shows new stable URL
+- Step auto-advances after 3 seconds if tunnel is connected (override with "Stay here")
+
+---
+
+#### Step 4 — GitHub (optional but recommended)
+
+- Headline: "Connect GitHub to browse and import your repos"
+- GitHub OAuth button → opens popup → completes OAuth → popup closes → user identity shown
+- On connect: show GitHub avatar, username, public repo count
+- Pre-load the first page of repos in the background (used in Step 5 and Projects view)
+- "Skip for now" link — GitHub can be connected later from Settings
+
+---
+
+#### Step 5 — AI Providers (auto-detected)
+
+On mount, scan process env for common keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GOOGLE_API_KEY`). For each found:
+- Auto-import with a "Detected from environment" badge
+- Run a live validation test immediately
+- Show provider as configured (green) before user touches anything
+
+For providers not found:
+- Provider card with masked key input
+- "Test key" runs inline — spinner → green tick or red error
+- Anthropic shown first and marked "Powers the AI agent (required for NanoClaw)"
+
+Ollama: auto-probe `http://localhost:11434/api/tags` — if running, auto-configure.
+
+**Auto-advance**: once at least one provider is configured and valid.
+
+---
+
+#### Step 6 — OpenCode (auto-install)
+
+On mount:
+1. Check if `opencode` binary exists → if yes, skip install, show version
+2. If not: auto-start install (`npm install -g opencode`) with live SSE log stream
+3. After install: auto-write `~/.config/opencode/config.json` from stored provider keys
+4. Show: `opencode --version` output in a styled terminal block
+5. Provider selector (pre-filled from Step 5)
+
+User sees install happen in real time. No input needed unless choosing non-default provider.
+
+---
+
+#### Step 7 — NanoClaw (optional, auto-setup)
+
+- Step marked "(Optional)" in progress rail
+- On mount if Anthropic key exists: auto-start setup (clone + docker build) with live SSE log
+- Setup steps shown as a mini timeline:
+  - `git clone qwibitai/nanoclaw` ← animating
+  - Writing `.env` from stored keys ← animating
+  - `docker build` ← streaming logs
+  - Container started ← done
+- Once container is up: show messaging platform options
+  - **WhatsApp**: QR code from Baileys (auto-refreshed every 20 s)
+  - **Telegram / Discord / Slack**: token input → inline validation
+  - **Web only**: default, no extra config — the in-app chat is already connected
+- "Skip messaging" skips platform pairing but still starts the web bridge
+
+---
+
+#### Step 8 — Complete
+
+- Full-screen confetti burst (canvas-confetti)
+- Summary grid: all configured services with green ticks
+- Dual access panel: both URLs as large pills with one-click copy + QR side-by-side
+- GitHub card (if connected): shows username + "X repos ready to import"
+- Animated "Your station is ready" — morphing text effect
+- Single CTA: "Open Dashboard" → navigates to `/app/dashboard`
+- Auto-redirect after 8 seconds
 
 ---
 
@@ -248,142 +353,243 @@ vibecodepc/
 **Goal**: In-browser terminal running opencode per project.
 
 - `opencode.ts` service:
-  - `start(projectId, cwd)` → spawn `opencode` via `node-pty` in project directory
-  - `kill(projectId)` → terminate process
-  - `resize(projectId, cols, rows)` → PTY resize
-  - Session registry: `Map<projectId, IPty>`
+  - `start(projectId, cwd)` → spawn `opencode` via `node-pty` in project CWD
+  - `kill(projectId)` → SIGTERM + cleanup
+  - `resize(projectId, cols, rows)` → pty.resize()
+  - Session registry: `Map<projectId, { pty, clients: Set<WebSocket> }>`
 - WebSocket route `/ws/terminal/:projectId`:
-  - On connect: attach to existing session or start new one
-  - `data` frames: browser → PTY stdin
-  - PTY stdout → broadcast to all connected clients for that project
-  - `resize` frames: update PTY dimensions
+  - On connect: attach to or create session
+  - `{ type: 'input', data }` → pty stdin
+  - `{ type: 'resize', cols, rows }` → pty resize
+  - PTY stdout → broadcast to all WebSocket clients for that session
+  - `{ type: 'exit', code }` on process exit
 - `TerminalPane.vue`:
   - `@xterm/xterm` + `@xterm/addon-fit` + `@xterm/addon-web-links`
-  - Custom Dracula-inspired theme matching app dark mode
-  - Auto-fit on window resize via ResizeObserver
-  - Reconnect on WS disconnect with exponential backoff
+  - Dracula-inspired dark theme (matches app surface colors)
+  - ResizeObserver → auto-fit + send resize frame to server
+  - Exponential backoff reconnect on disconnect
 - `IDEView.vue`:
-  - Split layout: file tree sidebar (read-only, future) + terminal
-  - Project selector dropdown in topbar
-  - "New Session" and "Kill Session" buttons
+  - Two-panel: collapsible `GitPanel.vue` left + `TerminalPane` right
+  - Project selector in topbar — switching auto-starts session for new project
+  - Session toolbar: active project, branch badge, "New Session" / "Kill" buttons
 
 ---
 
 ### Phase 4 — NanoClaw Agent Chat (Week 4)
 
-**Goal**: Web chat UI that talks to the nanoclaw agent.
-
-The challenge: nanoclaw is queue-based (SQLite). We bridge it:
+**Goal**: Polished web chat UI bridged to the nanoclaw agent.
 
 - `nanoclaw.ts` service:
-  - Writes user messages directly into nanoclaw's `messages` SQLite table as an inbound platform message
-  - Polls for outbound responses via `SELECT` with timestamp cursor
-  - Emits `agent_message` events via Node.js EventEmitter
-- SSE endpoint `GET /api/agent/stream`:
-  - Sends `data:` events for new agent messages
-  - Heartbeat ping every 15 s
-- `POST /api/agent/message` — user sends a message
+  - Inserts user messages into nanoclaw's SQLite `messages` table as `source: 'web'`
+  - Polls `SELECT` with timestamp cursor (100 ms interval) for outbound responses
+  - Emits `agent_message` via Node EventEmitter → consumed by SSE route
+- `GET /api/agent/stream` — SSE, heartbeat ping every 15 s
+- `POST /api/agent/message` — { content, projectId? }
 - `AgentView.vue`:
-  - Chat UI: bubbles, timestamps, typing indicator
-  - Connects to SSE stream on mount
-  - Markdown rendering for agent responses (`markdown-it`)
-  - Code blocks with syntax highlighting (`shiki`)
-  - "Clear history" and agent status indicator
-  - Mobile-first design: full-screen chat on small screens
+  - Chat bubbles: user right, agent left with avatar
+  - Animated typing indicator (three dots) while agent is processing
+  - Markdown rendering (`markdown-it`) with `shiki` syntax highlighting in code blocks
+  - Persistent context selector: "Chatting in context of: **my-saas-app**"
+  - Draggable input — expands to multi-line on Shift+Enter
+  - "Clear history" and agent restart in overflow menu
 
 ---
 
-### Phase 5 — Project Management (Week 4–5)
+### Phase 5 — GitHub Integration (Week 4–5)
 
-**Goal**: Create, browse, and switch between coding projects.
+**Goal**: GitHub as a first-class citizen — repos, projects, git ops, PRs.
 
-- `ProjectsView.vue`:
-  - Grid of `ProjectCard.vue` components
-  - Each card: name, language badge, last-opened, git branch (if applicable)
-  - "New Project" FAB → `NewProjectModal.vue`
-- `NewProjectModal.vue`:
-  - Name, path on filesystem, git clone URL (optional), default AI provider
-  - Creates directory, optionally runs `git clone`
-  - Writes project row to SQLite
-- `projects.ts` route:
-  - `GET /api/projects` — list all
-  - `POST /api/projects` — create
-  - `DELETE /api/projects/:id` — remove (does NOT delete files)
-  - `GET /api/projects/:id/status` — git status, file count, disk usage
-- Clicking a project → navigates to `/app/ide/:projectId`
-- Router guard starts opencode session for that project
+#### GitHub Service (`github.ts`)
+
+- OAuth: server-side flow (`/auth/github/start` → GitHub → `/auth/github/callback`)
+- Token stored encrypted in keystore
+- Octokit client initialized on demand with stored token
+- `listRepos(page, search)` → paginated repo list with language, stars, last push
+- `listPRs(owner, repo)` → open PRs with title, branch, status checks
+- `createPR(owner, repo, params)` → create PR from current branch
+- `getActivity(username)` → recent events (pushes, PR opens, issues)
+
+#### Git Service (`git.ts`)
+
+- `status(projectPath)` → `{ branch, ahead, behind, staged, unstaged, untracked }`
+- `diff(projectPath)` → unified diff string
+- `commit(projectPath, message)` → stage all + commit
+- `push(projectPath)` → push current branch (uses stored GitHub token via git credential helper)
+- `pull(projectPath)` → pull with rebase
+- `branches(projectPath)` → list local + remote branches
+- `checkout(projectPath, branch)` → switch branch (stash if dirty)
+- `clone(url, destPath)` → git clone with progress events via `simple-git` tasks
+
+#### GitHub Routes (`/api/github`)
+
+```
+GET  /api/github/status          → { authenticated, user: { login, avatar, publicRepos } }
+GET  /api/github/repos           → { repos: Repo[] }  (paginated, searchable)
+GET  /api/github/repos/:owner/:repo/prs  → { prs: PR[] }
+POST /api/github/repos/:owner/:repo/prs  → create PR
+GET  /api/github/activity        → { events: GitHubEvent[] }  (last 20)
+POST /api/github/import          → { repoUrl, name, path } → clone + create project
+```
+
+#### `GitHubView.vue`
+
+- Two tabs: **Repos** | **Activity**
+- Repos tab:
+  - Search input (filters client-side + refetches after 400 ms debounce)
+  - Language + sort filters
+  - `RepoCard.vue` grid: name, language badge, stars, last pushed, "Import" button
+  - Import → `POST /api/github/import` with SSE clone progress → auto-navigates to new project
+- Activity tab:
+  - Timeline of recent GitHub events with icons (push, PR, issue, review)
+  - Click event → opens GitHub URL in new tab
+
+#### `GitPanel.vue` (in IDE view)
+
+- Collapsible left panel in IDEView
+- Live git status: M/A/D/? file badges
+- Branch selector: dropdown of all branches, click to checkout
+- Staged/unstaged file lists with diff preview (click file)
+- Commit message input + "Commit & Push" button (or separate)
+- Ahead/behind indicator with pull/push arrows
+- PR shortcut: "Open PR on GitHub" → pre-filled create-PR modal
 
 ---
 
-### Phase 6 — Settings (Week 5)
+### Phase 6 — Real-Time Dashboard (Week 5–6)
 
-**Goal**: Manage keys, providers, tunnel, and system info.
+**Goal**: A live command center that shows everything at a glance.
 
-- `SettingsView.vue` with tab navigation:
-  - **AI Providers**: Re-enter/rotate keys, toggle providers, test connection
-  - **Cloudflare Tunnel**: Show status (connected/disconnected), restart tunnel, change domain
-  - **OpenCode**: Default provider, opencode version, reinstall
-  - **NanoClaw**: Agent config (name, platforms), restart container
-  - **System**: Hostname, IP, RAM/disk usage, Node & Docker versions, update button
-- `keystore.ts`: All keys AES-256-GCM encrypted with a machine key derived from hostname + MAC address
-- `KeyInput.vue`: shows `••••••••` with reveal toggle and copy button
+#### Layout
+
+```
+┌─ Topbar ────────────────────────────────────────────────────────┐
+│  VibeCodePC    [● tunnel connected]  remote-url  [@user avatar] │
+├─ Sidebar ─┬─ Main ────────────────────────────────────────────┤
+│           │                                                     │
+│  Dashboard│  ┌── SERVICES ──────────────────────────────────┐  │
+│  Projects │  │  [opencode]  [NanoClaw]  [Cloudflare]  [Docker]│ │
+│  IDE      │  │  ● 2 sessions ● active  ● stable  ● 2 running │ │
+│  Agent    │  │  [Open IDE]  [Chat]     [Settings] [Manage]   │ │
+│  GitHub   │  └──────────────────────────────────────────────┘  │
+│  Settings │                                                     │
+│           │  ┌── QUICK LAUNCH ─────────┐ ┌── VITALS ────────┐  │
+│           │  │  my-saas-app  ts  main  │ │ CPU [████░] 42%  │  │
+│           │  │  api-server   py  feat/ │ │ RAM [████░] 67%  │  │
+│           │  │  + New Project          │ │ Disk[████░] 45%  │  │
+│           │  └─────────────────────────┘ │ Temp 52°C        │  │
+│           │                             │ Uptime 3d 14h     │  │
+│           │  ┌── GITHUB ACTIVITY ──────┐ └─────────────────┘  │
+│           │  │  PR #42 opened  2h ago  │ ┌── ACCESS ─────────┐ │
+│           │  │  3 commits to main 4h   │ │ Local   [copy][QR]│ │
+│           │  │  Issue #7 closed  1d    │ │ Remote  [copy][QR]│ │
+│           │  │  [View all →]           │ └──────────────────┘  │
+│           │  └─────────────────────────┘                       │
+└───────────┴─────────────────────────────────────────────────────┘
+```
+
+#### Service Cards (`ServiceCard.vue`)
+
+Each of the 4 service cards (opencode, NanoClaw, Cloudflare, Docker) shows:
+- Pulsing color dot: green (running) / amber (starting) / red (error) / grey (stopped)
+- Key metric (session count, message count, tunnel URL, container count)
+- Primary action button (contextual: "Open IDE", "Chat", etc.)
+- Secondary "..." menu: restart, logs, settings
+
+Clicking the card body opens an inline log panel (last 50 lines, live-tailed via SSE).
+
+#### System Vitals (`VitalsGraph.vue`)
+
+- CPU %: sparkline graph (last 60 data points at 2 s interval via `/api/metrics/stream` SSE)
+- RAM used/total
+- Disk used/total
+- Pi CPU temperature (reads `/sys/class/thermal/thermal_zone0/temp`)
+- Uptime from `/proc/uptime`
+- All values update in real time — no page refresh needed
+
+#### GitHub Activity (`ActivityFeed.vue`)
+
+- Fetches from `GET /api/github/activity` on mount and polls every 60 s
+- Shows last 10 events: push, PR open/merge, issue open/close, review
+- Event icon + repo name + short description + relative time
+- Click → opens GitHub in new tab
+- Hidden (with placeholder) if GitHub not connected
+
+#### Quick Launch (`QuickLaunch.vue`)
+
+- Last 4 opened projects as cards: name, language icon, branch, time since last opened
+- One-click → navigates directly to `/app/ide/:projectId` (starts session)
+- "+ New Project" card → `NewProjectModal.vue`
+
+#### Access Panel (`AccessPanel.vue`)
+
+- Two URL rows: Local + Remote
+- Each: URL text (truncated) + copy icon + QR code popover
+- Cloudflare connection badge: quick vs named tunnel mode, uptime
+- "Upgrade to stable URL" link if in quick-tunnel mode
 
 ---
 
-### Phase 7 — Dashboard & Polish (Week 6)
+### Phase 7 — Projects & Settings (Week 6)
 
-**Goal**: Award-winning first impression.
+#### Projects View (`ProjectsView.vue`)
 
-- `DashboardView.vue`:
-  - Service health grid: OpenCode, NanoClaw, Cloudflare Tunnel, Docker
-  - Quick-launch buttons: "Start Coding" → recent project, "Chat with Agent"
-  - Recent projects list (last 5 opened)
-  - System vitals: CPU %, RAM %, disk usage (via `/proc` or `os` module)
-  - Dual access panel: local URL (`http://<hostname>.local:3000`) + tunnel URL, each with copy + QR code
-- Design system:
-  - Full dark mode (default), light mode toggle
-  - Color palette: deep indigo base, electric violet accent, neon green success
-  - Smooth page transitions (Vue's `<Transition>`)
-  - Micro-animations: status badges pulse, progress bars animate in
-  - Inter font for UI, JetBrains Mono for terminal and code
-- PWA: `vite-plugin-pwa` for add-to-homescreen on mobile
-- Responsive: sidebar collapses to bottom nav on mobile
+- Masonry grid of `ProjectCard.vue` components (3 cols desktop, 2 tablet, 1 mobile)
+- Card content: project name, language badge, git branch, ahead/behind count, last opened
+- Hover reveals: "Open IDE", "Chat about this", git status dot
+- "New Project" FAB (fixed bottom-right)
+- `NewProjectModal.vue` has two tabs:
+  - **Local**: name + filesystem path picker (browseable via API) + language
+  - **From GitHub**: search your repos inline (reuses github store) → one-click import
+
+#### Settings View (`SettingsView.vue`)
+
+Tabs: AI Providers | GitHub | Cloudflare | OpenCode | NanoClaw | System
+
+- **AI Providers**: Provider cards, key rotation, live test, usage display
+- **GitHub**: Connect/disconnect OAuth, webhook configuration, default clone path
+- **Cloudflare**: Current mode (quick/named), tunnel URL, switch to named, custom domain
+- **OpenCode**: Binary path, default provider, version, reinstall button
+- **NanoClaw**: Container state, messaging platforms, agent persona name, restart
+- **System**: Hostname, IP, versions table, `update.sh` trigger (shows live progress)
 
 ---
 
-### Phase 8 — Installer & Packaging (Week 6–7)
+### Phase 8 — Installer & Packaging (Week 7)
 
-**Goal**: One-command install on a fresh Raspberry Pi.
+**Goal**: One-command install that hands off a working URL.
 
 ```bash
 curl -fsSL https://vibecodepc.com/install.sh | bash
 ```
 
-`install.sh`:
-1. Detect OS / arch (arm64, armv7, amd64)
-2. Install Node.js 20 LTS via `nvm` if missing
-3. Install pnpm and git if missing
-4. Clone this repo into `~/.vibecodepc/app`
-5. `pnpm install --prod`
-6. `pnpm build`
-7. Download `cloudflared` binary for detected arch into `~/.vibecodepc/bin/`
-8. Register two systemd services:
-   - `vibecodepc.service` — the Node.js app on port 3000
-   - `vibecodepc-tunnel.service` — cloudflared quick tunnel pointing to `localhost:3000`
-9. Start both services
-10. Wait for `vibecodepc-tunnel.service` log to contain the `trycloudflare.com` URL (up to 15 s)
-11. Print:
-    ```
-    ✓ VibeCodePC installed!
+`install.sh` sequence:
 
-      Local:   http://<hostname>.local:3000
-      Remote:  https://<random>.trycloudflare.com   ← open this to run the setup wizard
+```
+[1/8] Detecting system (OS, arch, hostname)...
+[2/8] Installing Node.js 20 LTS via nvm...        ← skipped if present
+[3/8] Installing pnpm & git...                     ← skipped if present
+[4/8] Cloning VibeCodePC into ~/.vibecodepc/app...
+[5/8] Installing dependencies & building...
+[6/8] Downloading cloudflared (arm64)...
+[7/8] Registering systemd services...
+      vibecodepc.service       → Node.js app :3000
+      vibecodepc-tunnel.service → cloudflared quick tunnel → :3000
+[8/8] Starting services & waiting for tunnel URL...
 
-    The remote URL changes on each restart until you configure a named tunnel in the wizard.
-    ```
+╔═══════════════════════════════════════════════════════╗
+║  ✓ VibeCodePC is ready!                               ║
+║                                                       ║
+║  Local   http://raspberrypi.local:3000                ║
+║  Remote  https://random-name.trycloudflare.com        ║
+║                                                       ║
+║  Open the Remote URL to run the setup wizard.         ║
+║  The URL changes on restart until you set up a        ║
+║  named tunnel in the wizard (free, takes 2 min).      ║
+╚═══════════════════════════════════════════════════════╝
+```
 
-`update.sh`: git pull + rebuild + restart service
-`uninstall.sh`: stop service + remove files (keeps project directories)
+`update.sh`: git pull + pnpm build + systemctl restart both services + print new version
+`uninstall.sh`: stop + disable services + rm app dir (warns before deleting, keeps projects)
 
 ---
 
@@ -392,60 +598,83 @@ curl -fsSL https://vibecodepc.com/install.sh | bash
 ### OpenCode Integration
 
 ```
-Browser (xterm.js) ──WS──► Fastify WS route ──► node-pty ──► opencode process
-                   ◄──WS──              ◄─────────── PTY stdout
+Browser (xterm.js) ──WS──► /ws/terminal/:projectId ──► node-pty ──► opencode
+                   ◄──WS──                          ◄──── stdout
 ```
 
-- opencode is run as: `opencode` (no flags needed, uses project CWD)
-- Provider config via opencode's `~/.config/opencode/config.json` or env vars
-- Each browser tab connecting to the same project shares the same PTY session
+- Config auto-written to `~/.config/opencode/config.json` from stored provider keys
+- Each project uses its own CWD, so opencode loads that project's context
+- Multiple browser tabs share the same PTY session for the same project
 
 ### NanoClaw Integration
 
 ```
-AgentView.vue ──POST /api/agent/message──► Fastify ──► nanoclaw SQLite (insert)
-              ◄─────── SSE stream ─────── Fastify ◄── SQLite poller (100ms interval)
-                                                  (nanoclaw reads → processes → writes response)
+AgentView ──POST /api/agent/message──► Fastify ──► nanoclaw SQLite (insert)
+          ◄─────── SSE stream ─────── Fastify ◄── SQLite poller 100 ms
+                                             ↑
+                          nanoclaw container reads → Claude → writes response
 ```
 
-- nanoclaw runs in a Docker container with its SQLite file volume-mounted to host
-- The Fastify server accesses the same SQLite file directly (host-side path)
-- Web source ID is registered as a virtual platform in nanoclaw config
+- nanoclaw's SQLite volume-mounted at `~/.vibecodepc/nanoclaw/data/`
+- Fastify accesses the file directly (same host filesystem)
+- `web` registered as a virtual platform in nanoclaw post-clone patch
+
+### GitHub OAuth Flow
+
+```
+Browser → GET /auth/github/start
+       → 302 to github.com/login/oauth/authorize
+       → user approves
+       → github.com → GET /auth/github/callback?code=...
+       → Fastify exchanges code for token
+       → token stored in keystore
+       → 302 to /app/dashboard (or wizard step if mid-setup)
+```
+
+- Scopes: `repo`, `read:user` (no write to user data)
+- Token refresh not needed (GitHub classic tokens don't expire unless revoked)
+- `git push` uses token via git credential helper written to `~/.gitconfig` per-machine
 
 ### Cloudflare Tunnel
 
 ```
-Internet ──► Cloudflare Edge ──► cloudflared ──► localhost:3000
+Internet ──► CF Edge ──► cloudflared ──► localhost:3000
 ```
 
-Two tunnel modes — both managed by `cloudflare.ts`:
+Two modes in `cloudflare.ts`:
+- **Quick**: `cloudflared tunnel --url http://localhost:3000` (no account, ephemeral URL)
+- **Named**: `cloudflared tunnel --token <token>` (account required, stable URL)
 
-**Quick tunnel** (no account, started by installer):
-- `cloudflared tunnel --url http://localhost:3000`
-- Cloudflare assigns a random `*.trycloudflare.com` URL instantly
-- No token, no account needed — works out of the box
-- URL changes each restart — suitable for the setup wizard and light use
+Mode is selected on startup based on whether a `cf_tunnel_token` setting exists in SQLite.
 
-**Named tunnel** (optional, configured in wizard):
-- User creates a tunnel on `dash.cloudflare.com` and pastes the token
-- Stable URL, optionally on a custom domain
-- `cloudflared` started with `--token <token>` flag
+### Real-Time Metrics
 
-On app startup, `cloudflare.ts` checks which mode is active and starts accordingly.
-Both modes: tunnel and local LAN (`http://<hostname>.local:3000`) coexist simultaneously.
+```
+GET /api/metrics/stream   →   SSE (text/event-stream)
+  event: metrics
+  data: { cpu: 42, ramUsedMb: 1340, ramTotalMb: 2000, diskUsedGb: 12, diskTotalGb: 32, tempC: 52, uptimeS: 123456 }
+```
+
+Server reads from `/proc/stat`, `/proc/meminfo`, `df`, `/sys/class/thermal/` every 2 seconds.
+`metrics.ts` store subscribes on dashboard mount, unsubscribes on unmount.
 
 ---
 
 ## Environment Variables
 
 ```env
-# Server
 PORT=3000
 HOST=0.0.0.0
-DATA_DIR=~/.vibecodepc/data        # SQLite, configs
+NODE_ENV=production
+DATA_DIR=/home/pi/.vibecodepc/data
 
-# Derived at runtime (not user-set)
-MACHINE_KEY=<derived>              # For AES key derivation
+# GitHub OAuth App (register at github.com/settings/developers)
+GITHUB_CLIENT_ID=<your_client_id>
+GITHUB_CLIENT_SECRET=<your_client_secret>
+GITHUB_REDIRECT_URI=http://localhost:3000/auth/github/callback
+
+# Derived at runtime
+MACHINE_KEY=<derived from hostname+MAC — never set manually>
 ```
 
 All AI provider keys are stored encrypted in SQLite, not in `.env`.
@@ -454,12 +683,14 @@ All AI provider keys are stored encrypted in SQLite, not in `.env`.
 
 ## Security Considerations
 
-- **No public auth by default**: The app is intended to be LAN-only until Cloudflare tunnel is set up. After setup, strongly recommend enabling the built-in password lock (bcrypt hash in SQLite).
-- **Key encryption**: AES-256-GCM with a machine-derived key. Keys never logged.
-- **Terminal isolation**: Each project gets its own PTY, running as the app user.
-- **Docker socket**: Required for NanoClaw management. Warn user of implications.
-- **Cloudflare tunnel**: Encrypted end-to-end by Cloudflare. No port forwarding needed.
-- **Content Security Policy**: Fastify helmet plugin for HTTP headers.
+- **Auth**: App is open on LAN by default (Raspberry Pi use case). After Cloudflare tunnel is active, enable optional password lock (bcrypt hash in SQLite) for internet exposure.
+- **GitHub token**: Stored AES-256-GCM encrypted. Only `repo` + `read:user` scopes — no org admin, no delete.
+- **Key encryption**: Machine-derived key (SHA256 of hostname + primary MAC). Never logged.
+- **Terminal isolation**: Each project gets its own PTY as the app user — not root.
+- **Docker socket**: Required for NanoClaw. Warn user on dashboard that docker group membership is equivalent to root.
+- **Cloudflare tunnel**: End-to-end encrypted by Cloudflare. Zero open ports on the Pi.
+- **Content Security Policy**: Fastify `@fastify/helmet` with CSP headers.
+- **Git credentials**: GitHub token written to `~/.vibecodepc/.gitconfig` (not global `~/.gitconfig`) and referenced via `GIT_CONFIG` env on git operations.
 
 ---
 
@@ -467,10 +698,10 @@ All AI provider keys are stored encrypted in SQLite, not in `.env`.
 
 | # | Milestone | Target |
 |---|---|---|
-| M1 | Dev environment running, wizard shell | End of Week 1 |
-| M2 | Full setup wizard, device configured | End of Week 2 |
-| M3 | OpenCode terminal embedded and working | End of Week 3 |
-| M4 | NanoClaw chat UI live | End of Week 4 |
-| M5 | Projects + Settings complete | End of Week 5 |
-| M6 | Dashboard, PWA, polish | End of Week 6 |
-| M7 | One-line installer, systemd service | End of Week 7 |
+| M1 | Foundation: server + Vue shell + GitHub OAuth | End of Week 1 |
+| M2 | Full automated setup wizard (all 8 steps) | End of Week 2 |
+| M3 | OpenCode terminal embedded, per-project sessions | End of Week 3 |
+| M4 | NanoClaw chat + GitHub integration + GitPanel | End of Week 4–5 |
+| M5 | Real-time dashboard with metrics + activity feed | End of Week 5–6 |
+| M6 | Projects, Settings, polish, PWA | End of Week 6 |
+| M7 | One-line installer + systemd + update script | End of Week 7 |
