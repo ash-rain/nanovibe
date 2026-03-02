@@ -1,4 +1,4 @@
-.PHONY: dev build check lint cross install-tools
+.PHONY: dev build check lint cross release install-tools
 
 # Dev: air (Go hot reload) + Vite in parallel
 dev:
@@ -29,6 +29,10 @@ lint:
 # Cross-compile for ARM64
 cross:
 	GOOS=linux GOARCH=arm64 go build -o dist/vibecodepc-arm64 ./server/main.go
+
+# Build release binaries for all architectures (arm64, arm, amd64)
+release:
+	bash scripts/build-release.sh
 
 # Install dev tools
 install-tools:
