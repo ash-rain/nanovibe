@@ -18,7 +18,7 @@ The backend is a single Go binary. No runtime to install, no node_modules — ju
 On your Raspberry Pi (or any Debian/Ubuntu machine):
 
 ```bash
-curl -fsSL https://vibecodepc.com/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/ash-rain/nanovibe/main/scripts/install.sh | bash
 ```
 
 The installer runs silently, then prints:

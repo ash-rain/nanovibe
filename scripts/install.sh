@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # VibeCodePC Installer
-# Usage: curl -fsSL https://vibecodepc.com/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/ash-rain/nanovibe/main/scripts/install.sh | bash
 
 BOLD="\033[1m"
 DIM="\033[2m"

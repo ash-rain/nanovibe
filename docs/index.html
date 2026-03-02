@@ -447,7 +447,7 @@
 
   <div class="install-box">
     <span class="prompt">$</span>
-    <code id="install-cmd">curl -fsSL https://vibecodepc.com/install.sh | bash</code>
+    <code id="install-cmd">curl -fsSL https://raw.githubusercontent.com/ash-rain/nanovibe/main/scripts/install.sh | bash</code>
     <button class="copy-btn" id="copy-btn" onclick="copyInstall()">Copy</button>
   </div>
   <p class="install-note">Raspberry Pi 4/5 (arm64) · Pi 3 (arm) · Any Linux x86_64</p>
@@ -458,7 +458,7 @@
       <span>pi@raspberrypi ~ — bash</span>
     </div>
     <div class="terminal-body">
-      <div><span class="t-prompt">$ </span><span class="t-cmd">curl -fsSL https://vibecodepc.com/install.sh | bash</span></div>
+      <div><span class="t-prompt">$ </span><span class="t-cmd">curl -fsSL https://raw.githubusercontent.com/ash-rain/nanovibe/main/scripts/install.sh | bash</span></div>
       <div>&nbsp;</div>
       <div><span class="t-violet">  VibeCodePC</span>  <span class="t-muted">— AI coding station for Raspberry Pi</span></div>
       <div>&nbsp;</div>
@@ -623,7 +623,7 @@
     <p>One command. The app does the rest.</p>
     <div class="install-box" style="margin: 0 auto 1rem;">
       <span class="prompt">$</span>
-      <code>curl -fsSL https://vibecodepc.com/install.sh | bash</code>
+      <code>curl -fsSL https://raw.githubusercontent.com/ash-rain/nanovibe/main/scripts/install.sh | bash</code>
       <button class="copy-btn" onclick="copyInstall()">Copy</button>
     </div>
     <div style="margin-top: 1.25rem; display: flex; gap: .75rem; justify-content: center; flex-wrap: wrap;">
@@ -646,7 +646,7 @@
 
 <script>
   function copyInstall() {
-    const cmd = 'curl -fsSL https://vibecodepc.com/install.sh | bash';
+    const cmd = 'curl -fsSL https://raw.githubusercontent.com/ash-rain/nanovibe/main/scripts/install.sh | bash';
     navigator.clipboard.writeText(cmd).then(() => {
       document.querySelectorAll('.copy-btn').forEach(btn => {
         btn.textContent = 'Copied!';
