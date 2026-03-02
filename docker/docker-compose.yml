@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  nanoclaw:
+    build:
+      context: ./nanoclaw
+      dockerfile: Dockerfile
+    container_name: vibecodepc-nanoclaw
+    restart: unless-stopped
+    volumes:
+      - ~/.vibecodepc/nanoclaw/data:/app/data
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - PLATFORM=web
+    networks:
+      - vibecodepc
+
+networks:
+  vibecodepc:
+    driver: bridge
