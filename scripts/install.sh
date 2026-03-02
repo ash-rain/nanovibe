@@ -17,7 +17,7 @@ INSTALL_DIR="${HOME}/.vibecodepc"
 BIN_DIR="${INSTALL_DIR}/bin"
 DATA_DIR="${INSTALL_DIR}/data"
 LOG_DIR="${INSTALL_DIR}/logs"
-GITHUB_REPO="vibecodepc/vibecodepc"
+GITHUB_REPO="ash-rain/nanovibe"
 
 log()  { echo -e "     ${DIM}${1}${RESET}"; }
 step() { echo -e "  ${BOLD}${1}${RESET}"; }
@@ -136,7 +136,7 @@ case "${ARCH}" in
   *) echo "Unsupported arch: ${ARCH}"; exit 1 ;;
 esac
 
-DOWNLOAD_URL="https://github.com/vibecodepc/vibecodepc/releases/latest/download/vibecodepc-${BIN_ARCH}"
+DOWNLOAD_URL="https://github.com/ash-rain/nanovibe/releases/latest/download/vibecodepc-${BIN_ARCH}"
 echo "Downloading new binary..."
 curl -fsSL "${DOWNLOAD_URL}" -o "${BIN_DIR}/vibecodepc.new"
 chmod +x "${BIN_DIR}/vibecodepc.new"

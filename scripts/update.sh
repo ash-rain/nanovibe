@@ -11,7 +11,7 @@ case "${ARCH}" in
 esac
 
 echo "Downloading latest VibeCodePC..."
-curl -fsSL "https://github.com/vibecodepc/vibecodepc/releases/latest/download/vibecodepc-${ARCH_NAME}" -o /tmp/vibecodepc-new
+curl -fsSL "https://github.com/ash-rain/nanovibe/releases/latest/download/vibecodepc-${ARCH_NAME}" -o /tmp/vibecodepc-new
 chmod +x /tmp/vibecodepc-new
 
 echo "Stopping vibecodepc service..."
